@@ -3,28 +3,26 @@
 // Tailon frontend: framework-free vanilla JavaScript. It fetches the file list
 // and streams lines over Server-Sent Events. Modes: "tail" (follow) and "grep"
 // (whole file); a regexp filter (server-side, invertible) narrows the output.
-// Injected globals: relativeRoot, allowDownload, wrapLinesInitial,
-// tailLinesInitial.
+// Injected globals: relativeRoot, allowDownload.
 
 const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "/";
 const MODES = ["tail", "grep"];
+const TAIL_LINES = 10; // trailing lines shown when a tail starts (grep ignores it)
+const MAX_LINES = 50000; // browser-side scrollback cap
 
 const state = {
-    files: [], file: null, mode: "tail", filter: "", invert: false,
-    nlines: (typeof tailLinesInitial !== "undefined" && tailLinesInitial) || 10,
-    history: 2000,
-    wrap: (typeof wrapLinesInitial !== "undefined" && wrapLinesInitial) || false,
+    files: [], file: null, mode: "tail", filter: "", invert: false, wrap: false,
     source: null,
 };
 
 const el = {};
 [
     "file-select", "mode-select", "filter-input", "filter-apply",
-    "cfg-invert", "cfg-nlines", "cfg-history", "cfg-wrap",
-    "action-download", "status", "scrollable", "logview",
+    "cfg-invert", "cfg-wrap", "action-download", "status", "scrollable", "logview",
 ].forEach(function (id) { el[id] = document.getElementById(id); });
 
-// Log view: append-only lines with autoscroll and history trimming.
+// Log view: append-only lines. Auto-scrolls to the bottom while you're already
+// at the bottom (so new logs keep filling the screen), and caps the buffer.
 const logview = {
     lines: [],
     atBottom: function () {
@@ -32,11 +30,6 @@ const logview = {
         return Math.abs(p.scrollTop - (p.scrollHeight - p.offsetHeight)) < 50;
     },
     clear: function () { el["logview"].replaceChildren(); this.lines = []; },
-    trim: function () {
-        while (state.history > 0 && this.lines.length > state.history) {
-            el["logview"].removeChild(this.lines.shift());
-        }
-    },
     write: function (text) {
         const scroll = this.atBottom();
         const span = document.createElement("span");
@@ -44,7 +37,7 @@ const logview = {
         span.textContent = text;
         el["logview"].appendChild(span);
         this.lines.push(span);
-        this.trim();
+        while (this.lines.length > MAX_LINES) el["logview"].removeChild(this.lines.shift());
         if (scroll) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
     },
 };
@@ -56,7 +49,7 @@ function connect() {
     if (!state.file) return;
     logview.clear();
 
-    const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(state.nlines) });
+    const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(TAIL_LINES) });
     if (state.invert) p.set("invert", "1");
     if (state.file.all) p.set("all", "1"); else p.set("path", state.file.path);
 
@@ -119,8 +112,8 @@ function init() {
     el["mode-select"].onchange = function () { state.mode = el["mode-select"].value; connect(); };
 
     el["filter-input"].value = state.filter;
-    el["filter-input"].addEventListener("keyup", function (e) { if (e.key === "Enter") applyFilter(); });
-    el["filter-input"].addEventListener("change", applyFilter); // also apply on focus loss
+    el["filter-input"].addEventListener("keyup", function (e) { if (e.key === "Enter") applyFilter(); }); // Enter applies
+    el["filter-input"].addEventListener("change", applyFilter); // and so does focus loss
     el["filter-apply"].onclick = applyFilter;
 
     el["file-select"].addEventListener("focus", refreshFiles);
@@ -132,13 +125,8 @@ function init() {
 
     el["cfg-invert"].checked = state.invert;
     el["cfg-invert"].onchange = function () { state.invert = el["cfg-invert"].checked; connect(); };
-    el["cfg-nlines"].value = state.nlines;
-    el["cfg-nlines"].onchange = function () { state.nlines = Math.max(1, parseInt(el["cfg-nlines"].value, 10) || 1); connect(); };
-    el["cfg-history"].value = state.history;
-    el["cfg-history"].onchange = function () { state.history = Math.max(0, parseInt(el["cfg-history"].value, 10) || 0); logview.trim(); };
     el["cfg-wrap"].checked = state.wrap;
     el["cfg-wrap"].onchange = function () { state.wrap = el["cfg-wrap"].checked; el["logview"].classList.toggle("wrap", state.wrap); };
-    el["logview"].classList.toggle("wrap", state.wrap);
 
     refreshFiles().then(function () { updateDownload(); connect(); });
 }

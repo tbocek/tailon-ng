@@ -5,9 +5,9 @@ import (
 	"io/fs"
 )
 
-// frontendDist holds the compiled frontend assets (HTML templates and static
-// files), embedded into the binary at build time. The frontend is built
-// separately; see the Makefile and sources under ./frontend.
+// frontendDist holds the frontend assets (HTML templates and static files),
+// embedded into the binary at build time. The frontend is plain hand-written
+// HTML/CSS/JS under ./frontend — there is no build step or toolchain.
 //
 //go:embed frontend/dist frontend/templates
 var frontendDist embed.FS

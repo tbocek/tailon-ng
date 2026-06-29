@@ -5,6 +5,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -32,10 +33,16 @@ func fileInfo(path string) *ListEntry {
 	return &entry
 }
 
-var allFiles map[string]bool
+// allFiles is the set of files currently served. It is guarded by allFilesMu
+// because createListing rebuilds it (on every /list request) while the stream
+// and download handlers read it concurrently.
+var (
+	allFilesMu sync.RWMutex
+	allFiles   = map[string]bool{}
+)
 
 func createListing(filespecs []FileSpec) map[string][]*ListEntry {
-	allFiles = make(map[string]bool)
+	files := make(map[string]bool)
 	res := make(map[string][]*ListEntry)
 
 	for _, spec := range filespecs {
@@ -53,7 +60,7 @@ func createListing(filespecs []FileSpec) map[string][]*ListEntry {
 				entry.Alias = entry.Path
 			}
 			res[group] = append(res[group], entry)
-			allFiles[entry.Path] = true
+			files[entry.Path] = true
 		case "glob":
 			matches, _ := filepath.Glob(spec.Path)
 			for _, match := range matches {
@@ -66,7 +73,7 @@ func createListing(filespecs []FileSpec) map[string][]*ListEntry {
 					entry.Alias = rel
 				}
 				res[group] = append(res[group], entry)
-				allFiles[entry.Path] = true
+				files[entry.Path] = true
 			}
 		case "dir":
 			// Serve every file under the directory, recursively.
@@ -83,16 +90,21 @@ func createListing(filespecs []FileSpec) map[string][]*ListEntry {
 					entry.Alias = rel
 				}
 				res[group] = append(res[group], entry)
-				allFiles[entry.Path] = true
+				files[entry.Path] = true
 				return nil
 			})
 		}
 	}
 
+	allFilesMu.Lock()
+	allFiles = files
+	allFilesMu.Unlock()
 	return res
 }
 
 func fileAllowed(path string) bool {
+	allFilesMu.RLock()
+	defer allFilesMu.RUnlock()
 	_, ok := allFiles[path]
 	return ok
 }
@@ -100,10 +112,12 @@ func fileAllowed(path string) bool {
 // allowedFiles returns the sorted list of all served files. It backs the "all
 // files" stream mode, which tails every file at once.
 func allowedFiles() []string {
-	files := make([]string, 0, len(allFiles))
+	allFilesMu.RLock()
+	names := make([]string, 0, len(allFiles))
 	for p := range allFiles {
-		files = append(files, p)
+		names = append(names, p)
 	}
-	sort.Strings(files)
-	return files
+	allFilesMu.RUnlock()
+	sort.Strings(names)
+	return names
 }

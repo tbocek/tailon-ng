@@ -130,14 +130,9 @@ func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 	})
 }
 
-const (
-	// mergeInterval is how often all-files mode flushes its buffer of lines,
-	// sorted by timestamp, so several files are interleaved chronologically.
-	mergeInterval = 200 * time.Millisecond
-	// detectSample is how many of a file's first lines are sampled to detect its
-	// timestamp format before that format is locked in.
-	detectSample = 10
-)
+// mergeInterval is how often all-files mode flushes its buffer of lines, sorted
+// by timestamp, so several files are interleaved chronologically.
+const mergeInterval = 200 * time.Millisecond
 
 // logLine is one line of output tagged with the file it came from (used to
 // prefix lines when several files are streamed at once).
@@ -156,7 +151,7 @@ type logLine struct {
 //	nlines  in tail mode, how many trailing lines to show before following.
 //	path    the file to stream, or all=1 for every served file.
 //
-// Each line is sent as an SSE "data:" frame holding a JSON ["o", line] pair.
+// Each line is sent as an SSE "data:" frame holding the JSON-encoded line.
 // Reading, following and filtering are all done in Go — no external tail/grep.
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
@@ -284,45 +279,18 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Per-file timestamp detection: the layout is chosen from the file's first
-	// detectSample lines (checked across several lines, not guessed from one),
-	// then reused. A line with no timestamp inherits the file's previous one.
-	type detector struct {
-		layout string
-		sample []string
-		lastTS time.Time
-	}
-	detectors := make(map[string]*detector)
+	// Per-file timestamp detection (see timestamper in tailer.go): the format is
+	// detected from each file's first lines and then reused; a line with no
+	// timestamp inherits its file's previous one, so multi-line entries stay
+	// together.
+	stampers := make(map[string]*timestamper)
 	timestamp := func(ln logLine) time.Time {
-		d := detectors[ln.path]
-		if d == nil {
-			d = &detector{}
-			detectors[ln.path] = d
+		t := stampers[ln.path]
+		if t == nil {
+			t = &timestamper{}
+			stampers[ln.path] = t
 		}
-		var ts time.Time
-		var ok bool
-		switch d.layout {
-		case "none": // no usable timestamp format in this file
-		case "": // still sampling to detect the format
-			ts, ok = matchAny(ln.text)
-			if d.sample = append(d.sample, ln.text); len(d.sample) >= detectSample {
-				if d.layout = detectLayout(d.sample); d.layout == "" {
-					d.layout = "none"
-				}
-				d.sample = nil
-			}
-		default:
-			ts, ok = matchLayout(d.layout, ln.text)
-		}
-		switch {
-		case ok:
-			d.lastTS = ts
-			return ts
-		case !d.lastTS.IsZero():
-			return d.lastTS // continuation line: keep with the previous entry
-		default:
-			return time.Now()
-		}
+		return t.stamp(ln.text)
 	}
 
 	for {

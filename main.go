@@ -113,11 +113,9 @@ func parseFileSpec(spec string) (FileSpec, error) {
 
 // Config contains all backend and frontend configuration options and relevant state.
 type Config struct {
-	RelativeRoot     string
-	BindAddr         []string
-	WrapLinesInitial bool
-	TailLinesInitial int
-	AllowDownload    bool
+	RelativeRoot  string
+	BindAddr      []string
+	AllowDownload bool
 
 	FileSpecs []FileSpec
 }

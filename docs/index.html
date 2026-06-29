@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tailon — a tiny, dependency-free log viewer</title>
+    <meta name="description" content="Tailon is a minimal web viewer that tails and greps your log files from the browser. No dependencies, a single static binary, under 1,000 lines of code.">
+    <style>
+        :root {
+            --bg: #1d1f21; --panel: #282a2e; --fg: #c5c8c6; --muted: #8a8f98;
+            --accent: #ff974f; --line: #3a3e44;
+            --mono: "Consolas", "Menlo", "DejaVu Sans Mono", "Courier New", monospace;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: var(--bg); color: var(--fg);
+            font: 16px/1.6 "Helvetica Neue", Arial, system-ui, sans-serif;
+        }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+        header { text-align: center; padding: 64px 20px 32px; }
+        h1 { font-size: 56px; margin: 0; letter-spacing: -1px; }
+        h1 .dot { color: var(--accent); }
+        .tagline { font-size: 20px; color: var(--fg); max-width: 640px; margin: 16px auto 0; }
+        .tagline strong { color: var(--accent); font-weight: 600; }
+        .badges { margin-top: 22px; }
+        .btn {
+            display: inline-block; margin: 4px; padding: 10px 18px; border-radius: 6px;
+            border: 1px solid var(--line); color: var(--fg); font-weight: 600;
+        }
+        .btn.primary { background: var(--accent); color: #1d1f21; border-color: var(--accent); }
+        .btn:hover { text-decoration: none; border-color: var(--accent); }
+        .shot {
+            display: block; width: 100%; margin: 32px auto; border: 1px solid var(--line);
+            border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+        .usps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 40px 0; }
+        .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
+        .card h3 { margin: 0 0 8px; font-size: 17px; }
+        .card h3::before { content: "▸ "; color: var(--accent); }
+        .card p { margin: 0; color: var(--muted); font-size: 15px; }
+        section { margin: 48px 0; }
+        h2 { font-size: 26px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+        pre {
+            background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+            padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 14px;
+            color: var(--fg);
+        }
+        pre .c { color: var(--accent); }
+        .recipe { background: var(--panel); border-left: 3px solid var(--accent); border-radius: 4px; padding: 14px 18px; margin: 14px 0; }
+        .recipe strong { color: var(--accent); }
+        code { font-family: var(--mono); background: var(--panel); padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
+        footer { text-align: center; color: var(--muted); padding: 40px 20px 64px; border-top: 1px solid var(--line); }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <header>
+        <h1>Tailon<span class="dot">.</span></h1>
+        <p class="tagline">A tiny, dependency-free web viewer that <strong>tail</strong>s and <strong>grep</strong>s your log files — right in the browser.</p>
+        <div class="badges">
+            <a class="btn primary" href="https://github.com/tbocek/tailon">GitHub</a>
+            <a class="btn" href="https://github.com/tbocek/tailon/releases">Download</a>
+        </div>
+    </header>
+
+    <img class="shot" src="scr.png" alt="Tailon — the All files view merging several logs in timestamp order">
+
+    <div class="usps">
+        <div class="card">
+            <h3>No dependencies</h3>
+            <p>The backend is pure Go standard library; the frontend is vanilla HTML/CSS/JS. No frameworks, no npm, no external <code>tail</code>/<code>grep</code>.</p>
+        </div>
+        <div class="card">
+            <h3>Minimal code</h3>
+            <p>Under 1,000 lines of code, total. Small enough to read in one sitting and audit before you run it on a server.</p>
+        </div>
+        <div class="card">
+            <h3>Single binary</h3>
+            <p>Everything — templates, CSS, JS — is embedded. Drop one static binary on a box and run it. Linux &amp; macOS, Intel &amp; ARM.</p>
+        </div>
+        <div class="card">
+            <h3>Just tail &amp; grep</h3>
+            <p><b>tail</b> follows a file live; <b>grep</b> reads it whole. A regular-expression filter (invertible) narrows either — all done natively in Go.</p>
+        </div>
+        <div class="card">
+            <h3>Group by date</h3>
+            <p>The <b>All files</b> view merges many logs in timestamp order (ISO&nbsp;8601, syslog, Apache, ctime…), so you read events across hosts chronologically.</p>
+        </div>
+        <div class="card">
+            <h3>Stream over SSE</h3>
+            <p>Lines arrive live over Server-Sent Events and auto-scroll while you're at the bottom — like a terminal, but in a browser tab.</p>
+        </div>
+    </div>
+
+    <section>
+        <h2>Install</h2>
+        <p>Grab the latest release binary for your OS/arch (installs to <code>/usr/local/bin</code>, or <code>~/.local/bin</code>):</p>
+        <pre>curl -sL https://raw.githubusercontent.com/tbocek/tailon/main/install.sh | bash</pre>
+        <p>Or build from source with Go 1.26+:</p>
+        <pre>go install github.com/tbocek/tailon@latest</pre>
+    </section>
+
+    <section>
+        <h2>Use it</h2>
+        <p>Point tailon at files, globs, or a whole directory:</p>
+        <pre>tailon /var/log/remote/          <span class="c"># serve a directory, recursively</span>
+tailon "/var/log/*.log"          <span class="c"># a glob</span>
+tailon -b :9000 access.log        <span class="c"># pick the port</span></pre>
+        <p>Then open <code>http://localhost:8080</code>, choose a file (or <b>All files</b>), pick <b>tail</b> or <b>grep</b>, and type a regexp to filter.</p>
+    </section>
+
+    <section>
+        <h2>Recipes</h2>
+        <div class="recipe">
+            <strong>Log rotation?</strong> Let <a href="https://linux.die.net/man/8/logrotate">logrotate</a> do its job — tailon keeps following a file across rotation and truncation, reopening it automatically.
+        </div>
+        <div class="recipe">
+            <strong>Many hosts?</strong> Ship logs with <a href="https://www.syslog-ng.com/">syslog-ng</a> (or rsyslog) into a directory such as <code>/var/log/remote</code>, point tailon at it, and pick <b>All files</b> — every host's log, merged in timestamp order.
+        </div>
+    </section>
+
+    <footer>
+        <p>Tailon is a fork of <a href="https://github.com/gvalkov/tailon">gvalkov/tailon</a>, rebuilt to be tiny and dependency-free. Apache 2.0 licensed.</p>
+        <p><a href="https://github.com/tbocek/tailon">github.com/tbocek/tailon</a></p>
+    </footer>
+</div>
+</body>
+</html>

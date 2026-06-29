@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -58,6 +59,24 @@ func TestListHandler(t *testing.T) {
 	if len(entries) != 1 || entries[0].Path != "testdata/ex1/var/log/1.log" {
 		t.Fatalf("unexpected listing: %#v", listing)
 	}
+}
+
+// TestListingNoRace hammers createListing (which rebuilds the global allFiles)
+// against the concurrent readers fileAllowed/allowedFiles, as happens when a
+// /list request overlaps a /stream or /files request. It must pass under -race.
+func TestListingNoRace(t *testing.T) {
+	setupConfig(t, "testdata/ex1/var/log/*.log")
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); createListing(config.FileSpecs) }()
+		go func() {
+			defer wg.Done()
+			_ = allowedFiles()
+			fileAllowed("testdata/ex1/var/log/1.log")
+		}()
+	}
+	wg.Wait()
 }
 
 // readSSEData reads up to n SSE "data:" payloads from r, failing after timeout.

@@ -206,3 +206,45 @@ func detectLayout(sample []string) string {
 	}
 	return best
 }
+
+// detectSample is how many of a file's first lines are sampled to detect its
+// timestamp format before that format is locked in.
+const detectSample = 10
+
+// timestamper extracts a timestamp from each line of a single file. It detects
+// the file's format from its first detectSample lines (chosen across several
+// lines rather than guessed from one) and then reuses it. A line with no
+// recognizable timestamp inherits the file's previous one, so multi-line entries
+// stay together; if the file has none, lines fall back to time.Now.
+type timestamper struct {
+	layout string
+	sample []string
+	last   time.Time
+}
+
+func (t *timestamper) stamp(line string) time.Time {
+	var ts time.Time
+	var ok bool
+	switch t.layout {
+	case "none": // no usable timestamp format in this file
+	case "": // still sampling to detect the format
+		ts, ok = matchAny(line)
+		if t.sample = append(t.sample, line); len(t.sample) >= detectSample {
+			if t.layout = detectLayout(t.sample); t.layout == "" {
+				t.layout = "none"
+			}
+			t.sample = nil
+		}
+	default:
+		ts, ok = matchLayout(t.layout, line)
+	}
+	switch {
+	case ok:
+		t.last = ts
+		return ts
+	case !t.last.IsZero():
+		return t.last // continuation line: keep with the previous entry
+	default:
+		return time.Now()
+	}
+}

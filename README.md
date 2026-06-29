@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/190997/42879022-6d5915fc-8a8f-11e8-8fe6-903c06bd52a9.png?raw=True" width="450px">
+  <img src="docs/scr.png" alt="Tailon screenshot" width="900">
 </p>
 
 # Tailon
@@ -20,7 +20,9 @@ Tailon is a webapp for looking at and searching through log files from your
 browser. It serves files — single files, globs or whole directories — and lets
 you **tail** them live or **grep** through them, with a regular-expression
 filter (which can be inverted). Reading, following and filtering are all done
-natively in Go; tailon never shells out to `tail`, `grep` or any other tool.
+natively in Go: tailon never shells out to `tail`, `grep` or any other tool, and
+it has **no dependencies** — just the Go standard library, shipped as a single
+static binary.
 
 ## Install
 
