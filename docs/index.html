@@ -79,6 +79,10 @@
             <p>No database, no agents, no ingestion pipeline — <b>just files</b>. Point it at the logs already on disk (syslog-ng, journald, Docker, app log files) and read them. One auditable static binary, ideal for a home server or a single VPS.</p>
         </div>
         <div class="card">
+            <h3>No built-in auth</h3>
+            <p>Tailon-ng does <b>no authentication</b> of its own — anyone who can reach its port can read the served files. Bind it to localhost or run it behind an authenticating reverse proxy. It's a log viewer, not a gateway.</p>
+        </div>
+        <div class="card">
             <h3>No dependencies</h3>
             <p>The backend is pure Go standard library; the frontend is vanilla HTML/CSS/JS. No frameworks, no npm, no external <code>tail</code>/<code>grep</code>.</p>
         </div>
@@ -91,8 +95,8 @@
             <p>Everything — templates, CSS, JS — is embedded. Drop one static binary on a box and run it. Linux &amp; macOS, Intel &amp; ARM.</p>
         </div>
         <div class="card">
-            <h3>Just tail &amp; grep</h3>
-            <p><b>tail</b> follows a file live; <b>grep</b> reads it whole. A regular-expression filter (invertible) narrows either — all done natively in Go.</p>
+            <h3>Just tail &amp; grep — no shell</h3>
+            <p><b>tail</b> follows a file live; <b>grep</b> reads it whole. A regular-expression filter (invertible) narrows either — all in-process in Go, with no <code>grep</code>/<code>sed</code>/<code>awk</code> subprocess and nothing that reaches a shell.</p>
         </div>
         <div class="card">
             <h3>Group by date</h3>
@@ -114,21 +118,21 @@
 
     <section>
         <h2>Use it</h2>
-        <p>Point tailon at files, directories, or globs — directories are served recursively:</p>
-        <pre>tailon /var/log/remote/                    <span class="c"># a directory, recursively</span>
-tailon "/var/log/**.log"                   <span class="c"># a recursive glob (** = any depth)</span>
-tailon /var/log/nginx/,/var/log/apache/    <span class="c"># several, comma-separated</span>
-tailon -b :9000 access.log                 <span class="c"># pick the port</span></pre>
+        <p>Point tailon-ng at files, directories, or globs — directories are served recursively:</p>
+        <pre>tailon-ng /var/log/remote/                  <span class="c"># a directory, recursively</span>
+tailon-ng "/var/log/**.log"                 <span class="c"># a recursive glob (** = any depth)</span>
+tailon-ng /var/log/nginx/,/var/log/apache/  <span class="c"># several, comma-separated</span>
+tailon-ng -b :9000 access.log               <span class="c"># pick the port</span></pre>
         <p>Then open <code>http://localhost:8080</code>, choose a single file, a <b>subfolder</b>, or <b>All files</b>, pick <b>tail</b> or <b>grep</b>, and type a regexp to filter.</p>
     </section>
 
     <section>
         <h2>In the wild: a self-hosted log hub</h2>
         <p>
-            One tailon tab can stand in for <code>ssh</code>-ing into a fleet of machines. A typical deployment:
+            One tailon-ng tab can stand in for <code>ssh</code>-ing into a fleet of machines. A typical deployment:
             every service on a self-hosted server logs through the container runtime's syslog driver into a local
             collector, while other machines on the network ship their logs to that same collector over TLS. The
-            collector (syslog-ng, rsyslog, …) writes <b>one file per source</b> into a shared directory; tailon
+            collector (syslog-ng, rsyslog, …) writes <b>one file per source</b> into a shared directory; tailon-ng
             mounts it read-only and serves it behind a reverse proxy with authentication. Open <b>All files</b> and
             every host and container becomes a single, live, timestamp-ordered stream you can grep.
         </p>
@@ -145,7 +149,7 @@ flowchart LR
         C["containers"]
         S["log collector<br/>(syslog-ng)"]
         DIR[("shared dir<br/>one file per source")]
-        T["tailon<br/>(read-only)"]
+        T["tailon-ng<br/>(read-only)"]
         P["reverse proxy<br/>HTTPS · auth"]
     end
     B["browser<br/>tail · grep · All files"]
@@ -164,10 +168,10 @@ flowchart LR
     <section>
         <h2>Recipes</h2>
         <div class="recipe">
-            <strong>Log rotation?</strong> Let <a href="https://linux.die.net/man/8/logrotate">logrotate</a> do its job — tailon keeps following a file across rotation and truncation, reopening it automatically.
+            <strong>Log rotation?</strong> Let <a href="https://linux.die.net/man/8/logrotate">logrotate</a> do its job — tailon-ng keeps following a file across rotation and truncation, reopening it automatically.
         </div>
         <div class="recipe">
-            <strong>Many hosts?</strong> Ship logs with <a href="https://www.syslog-ng.com/">syslog-ng</a> (or rsyslog) into a directory such as <code>/var/log/remote</code>, point tailon at it, and pick <b>All files</b> — every host's log, merged in timestamp order.
+            <strong>Many hosts?</strong> Ship logs with <a href="https://www.syslog-ng.com/">syslog-ng</a> (or rsyslog) into a directory such as <code>/var/log/remote</code>, point tailon-ng at it, and pick <b>All files</b> — every host's log, merged in timestamp order.
         </div>
     </section>
 

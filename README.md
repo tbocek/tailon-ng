@@ -17,9 +17,16 @@ Tailon-ng is a webapp for looking at and searching through log files from your
 browser. It serves files — single files, globs or whole directories — and lets
 you **tail** them live or **grep** through them, with a regular-expression
 filter (which can be inverted). Reading, following and filtering are all done
-natively in Go: tailon never shells out to `tail`, `grep` or any other tool, and
+natively in Go: tailon-ng never shells out to `tail`, `grep` or any other tool, and
 it has **no dependencies** — just the Go standard library, shipped as a single
 static binary.
+
+**Security posture, up front:** tailon-ng has **no built-in authentication** —
+anyone who can reach its port can read the files it serves, so bind it to
+localhost (`-b 127.0.0.1:8080`) or put it behind an authenticating reverse proxy.
+And it **never shells out** to `grep`, `sed`, `awk` or anything else — tailing
+and filtering run in-process in Go ([RE2]), so nothing typed in the UI can reach
+a shell. More in [Security](#security).
 
 ## How this fork differs from the original
 
@@ -67,15 +74,15 @@ Each file can be viewed in two modes — **tail** (follow the file live, like
 an optional regular-expression **filter** that can be inverted (both set in the
 UI). Tailon-ng itself is configured entirely with command-line flags.
 
-To get started, run tailon with the files or directories you want to monitor.
+To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a
 directory and `**` across them — and a single argument can list several,
 comma-separated:
 
 ```
-tailon /var/log/apache/access.log /var/log/apache/error.log /var/log/messages
-tailon /var/log/apache/,/var/log/nginx/
-tailon "/var/log/**.log"
+tailon-ng /var/log/apache/access.log /var/log/apache/error.log /var/log/messages
+tailon-ng /var/log/apache/,/var/log/nginx/
+tailon-ng "/var/log/**.log"
 ```
 
 Directories are served recursively — every file beneath them (including in
@@ -97,10 +104,10 @@ hosts together.
 
 A common deployment is a host that aggregates logs from many machines via
 [syslog-ng] (or rsyslog) into a directory tree such as `/var/log/remote`. Point
-tailon at the directory to serve everything under it recursively:
+tailon-ng at the directory to serve everything under it recursively:
 
 ```
-tailon /var/log/remote/
+tailon-ng /var/log/remote/
 ```
 
 Every file beneath it — including per-host subdirectories — shows up in the file
@@ -108,11 +115,11 @@ picker, and **All files** streams them all merged in timestamp order.
 
 Tailon-ng's server-side functionality is summarized entirely in its help message:
 
-[//]: # (run "./tailon --help" to update the next section)
+[//]: # (run "./tailon-ng --help" to update the next section)
 
 [//]: # (BEGIN HELP_USAGE)
 ```
-Usage: tailon [options] <path> [<path> ...]
+Usage: tailon-ng [options] <path> [<path> ...]
 
 Tailon-ng is a webapp for searching through log files from your browser.
 
@@ -128,25 +135,29 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments or comma-separated.
 
 Example usage:
-  tailon /var/log/syslog /var/log/auth.log
-  tailon /var/log/nginx/,/var/log/apache/
-  tailon /var/log/remote/
-  tailon "/var/log/**.log"
-  tailon -b 127.0.0.1:8080 /var/log/messages
+  tailon-ng /var/log/syslog /var/log/auth.log
+  tailon-ng /var/log/nginx/,/var/log/apache/
+  tailon-ng /var/log/remote/
+  tailon-ng "/var/log/**.log"
+  tailon-ng -b 127.0.0.1:8080 /var/log/messages
 ```
 [//]: # (END HELP_USAGE)
 
 ## Security
 
-Tailon-ng does not run external commands or invoke a shell. The filter is a Go
-([RE2]) regular expression applied in-process, so there is no risk of shell or
-command injection from anything entered in the UI.
+**No built-in authentication.** By default tailon-ng is reachable by anyone who
+can connect to its address and port, and it serves — and lets clients download —
+exactly the files you point it at. Bind it to localhost (`-b 127.0.0.1:8080`) or
+put it behind an authenticating reverse proxy. It is a log viewer, not a gateway.
 
-Tailon-ng serves — and lets clients download — exactly the files you point it at on
-the command line. It performs no
-authentication: by default it is reachable by anyone who can connect to its
-address and port. Restrict the bind address or put it behind an authenticating
-reverse proxy if that matters for your deployment.
+**No shell, no external commands.** Tailon-ng never runs `tail`, `grep`, `sed`,
+`awk` or any subprocess; reading, following and filtering are all done in-process
+in Go. The UI filter is a Go ([RE2]) regular expression, so nothing entered in
+the browser can cause shell or command injection.
+
+**Safe downloads.** Files are served as plain-text attachments with
+`X-Content-Type-Options: nosniff`, so a log line that happens to look like HTML
+can't be rendered as script in your browser.
 
 ## Development
 
@@ -197,7 +208,7 @@ the source of the recurring "wait, which tailon?" confusion:
 2. **[gvalkov/tailon]** — a full rewrite in Go with a Vue.js + SockJS frontend,
    configured through a file and released with GoReleaser. **This is the upstream
    this repository is forked from.**
-3. **This fork** — drops the third-party frontend and tooling for a
+3. **This fork (tailon-ng)** — drops the third-party frontend and tooling for a
    framework-free, dependency-free, single static binary. See [How this fork
    differs from the original](#how-this-fork-differs-from-the-original) for the
    point-by-point comparison.
