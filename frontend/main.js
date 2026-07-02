@@ -40,7 +40,7 @@ function cacheEntry() {
 const el = {};
 [
     "file-select", "mode-select", "filter-input", "filter-apply",
-    "cfg-invert", "cfg-wrap", "action-download", "status", "scrollable", "logview", "toast",
+    "cfg-invert", "cfg-wrap", "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(function (id) { el[id] = document.getElementById(id); });
 
 // Line selection: clicking a line highlights it (clicking again clears it),
@@ -154,6 +154,12 @@ const logview = {
         return Math.abs(p.scrollTop - (p.scrollHeight - p.offsetHeight)) < 50;
     },
     locate: null, // raw text to find, select and scroll to (set by jumpToFile)
+    // While a grep loads, the view stays put — no per-frame bottom-sticking,
+    // which costs a forced layout per frame on a large scrollback. A sweep
+    // under the toolbar shows progress and EOF jumps to the bottom once,
+    // unless the user started scrolling (reading) during the load.
+    loading: false,
+    userScrolled: false,
     clear: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
         this.pending = [];
@@ -175,7 +181,7 @@ const logview = {
     },
     flush: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
-        const scroll = this.atBottom();
+        const scroll = !this.loading && this.atBottom();
         const frag = document.createDocumentFragment();
         let located = null;
         for (const ln of this.pending) {
@@ -210,17 +216,30 @@ const logview = {
             // degrade to a plain click instead of silently doing nothing.
             if (selAnchor && !selAnchor.isConnected) selAnchor = null;
         }
-        if (located) located.scrollIntoView({ block: "center" });
-        else if (scroll) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+        if (located) {
+            located.scrollIntoView({ block: "center" });
+            this.userScrolled = true; // a deliberate jump: EOF must not yank to the bottom
+        } else if (scroll) {
+            el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+        }
     },
 };
 
 function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
 
+// setLoading toggles the sweep under the toolbar and the scroll-suppressed
+// loading mode (see logview.loading).
+function setLoading(on) {
+    el["loading"].hidden = !on;
+    logview.loading = on;
+    if (on) logview.userScrolled = false;
+}
+
 function connect() {
     if (state.source) { state.source.close(); state.source = null; }
     if (!state.file) return;
     logview.clear();
+    setLoading(false);
 
     const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(TAIL_LINES) });
     if (state.invert) p.set("invert", "1");
@@ -238,6 +257,9 @@ function connect() {
     }
 
     setStatus("connecting…");
+    // Grep modes are a bounded load ending in EOF: show the loading sweep and
+    // hold the view still until then. Tail keeps its live bottom-following.
+    if (state.mode !== "tail") setLoading(true);
     const src = new EventSource(RELATIVE_ROOT + "stream?" + p.toString());
     state.source = src;
     src.onopen = function () { setStatus(""); };
@@ -266,6 +288,10 @@ function connect() {
             logview.locate = null;
             toast("line not found");
         }
+        setLoading(false);
+        // Fully loaded: jump to the end — unless the user started reading
+        // (scrolled, or jumped to a line) while it streamed.
+        if (!logview.userScrolled) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
         src.close(); state.source = null; setStatus("");
     });
     src.onerror = function () { setStatus("reconnecting…"); };
@@ -425,6 +451,11 @@ function init() {
     // Shift+click must not trigger the browser's native text selection.
     el["scrollable"].addEventListener("mousedown", function (e) {
         if (e.shiftKey) e.preventDefault();
+    });
+    // Nothing scrolls programmatically during a load, so any scroll (past the
+    // clamp-to-0 that clearing the view fires) means the user started reading.
+    el["scrollable"].addEventListener("scroll", function () {
+        if (logview.loading && el["scrollable"].scrollTop > 0) logview.userScrolled = true;
     });
 
     // Ctrl-C with highlighted lines copies exactly those lines — unless the

@@ -33,6 +33,28 @@ body {
     padding: 6px 8px;
     background: var(--bar);
     border-bottom: 1px solid #16181a;
+    position: relative; /* anchors the #loading bar just below */
+}
+
+/* Indeterminate loading bar: a thin sweep pinned under the toolbar while a
+   grep streams in. The view stays put during the load (no per-frame scrolling)
+   and jumps to the bottom once, at EOF. */
+#loading {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -4px;
+    height: 4px;
+    z-index: 15;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--notice), transparent);
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    animation: loading-sweep 1.1s linear infinite;
+}
+@keyframes loading-sweep {
+    from { background-position: -40% 0; }
+    to { background-position: 140% 0; }
 }
 
 /* On narrow windows the file selector and filter give way first; the fixed
@@ -118,6 +140,9 @@ body {
     margin: 0 -8px; /* cancel #logview's side padding so the highlight is edge-to-edge */
     transition: background-color 0.08s ease;
 }
+/* In wrap mode lines break at the container edge — max-content would size the
+   box to the unwrapped line and prevent any wrapping at all. */
+#logview.wrap .log-entry { width: auto; }
 #logview .log-entry:hover { background: rgba(255, 255, 255, 0.045); }
 #logview .log-entry.selected {
     background: rgba(255, 151, 79, 0.16);
