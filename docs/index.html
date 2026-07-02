@@ -96,7 +96,7 @@
         </div>
         <div class="card">
             <h3>Just tail &amp; grep — no shell</h3>
-            <p><b>tail</b> follows a file live (with a regular-expression filter); <b>view</b> reads it whole, with search-as-you-type highlighting and next/prev jumping; <b>find</b> greps server-side — all in-process in Go, with no <code>grep</code>/<code>sed</code>/<code>awk</code> subprocess and nothing that reaches a shell.</p>
+            <p><b>tail</b> follows a file live and <b>view</b> reads it whole — both with regexp search-as-you-type highlighting and next/prev jumping; <b>find</b> greps server-side — all in-process in Go, with no <code>grep</code>/<code>sed</code>/<code>awk</code> subprocess and nothing that reaches a shell.</p>
         </div>
         <div class="card">
             <h3>Group by date</h3>
@@ -135,7 +135,7 @@
 tailon-ng "/var/log/**.log"                 <span class="c"># a recursive glob (** = any depth)</span>
 tailon-ng /var/log/nginx/,/var/log/apache/  <span class="c"># several, comma-separated</span>
 tailon-ng -b :9000 access.log               <span class="c"># pick the port</span></pre>
-        <p>Then open <code>http://localhost:8080</code>, choose a single file, a <b>subfolder</b>, or <b>All files</b>, pick <b>tail</b>, <b>find</b> or <b>view</b>, and type a regexp to filter.</p>
+        <p>Then open <code>http://localhost:8080</code>, choose a single file, a <b>subfolder</b>, or <b>All files</b>, pick <b>tail</b>, <b>find</b> or <b>view</b>, and type a regexp to search.</p>
     </section>
 
     <section>

@@ -192,24 +192,6 @@ func TestStreamViewCap(t *testing.T) {
 	}
 }
 
-// TestStreamFilter checks the regexp filter (done in Go).
-func TestStreamFilter(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
-	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
-	defer srv.Close()
-
-	// Only lines matching "2".
-	resp, err := http.Get(srv.URL + "?mode=grep&path=testdata/ex1/var/log/1.log&filter=2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := frameTexts(readSSEData(t, resp.Body, 1, 5*time.Second))
-	resp.Body.Close()
-	if want := []string{"2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("filter: got %v, want %v", got, want)
-	}
-}
-
 // TestStreamFollow checks that tail mode streams lines appended after connect.
 func TestStreamFollow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "follow.log")
@@ -705,15 +687,6 @@ func TestStreamRejectsUnknownFile(t *testing.T) {
 	streamHandler(w, httptest.NewRequest("GET", "/stream?mode=tail&path=/etc/passwd", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for a disallowed file, got %d", w.Code)
-	}
-}
-
-func TestStreamRejectsBadFilter(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
-	w := httptest.NewRecorder()
-	streamHandler(w, httptest.NewRequest("GET", "/stream?mode=grep&path=testdata/ex1/var/log/1.log&filter=%28", nil))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for an invalid regexp, got %d", w.Code)
 	}
 }
 

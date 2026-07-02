@@ -132,11 +132,11 @@ body {
     border-radius: 2px;
 }
 
-#scrollable { flex: 1 1 auto; overflow: auto; }
-/* A right gap can only show at full right-scroll (or with wrap on) — lines
-   wider than the window are clipped by the scrollport itself, which no
-   padding can inset. The bottom gap comes from #log-anchor below, not from
-   padding here: bottom-pinning scrolls that spacer into view. */
+/* The black border frames the log on all four sides. Unlike padding, a border
+   is chrome, not scrollable content: the right edge keeps its frame even
+   while over-wide lines are clipped by the scrollport, and the bottom frame
+   sits below the horizontal scrollbar. */
+#scrollable { flex: 1 1 auto; overflow: auto; border: 8px solid #000; }
 #logview {
     font-family: var(--mono);
     font-size: 13px;
@@ -146,12 +146,11 @@ body {
     word-break: break-all;
 }
 
-/* The permanent last element of the log view. Pinning to the bottom scrolls
-   this spacer into view — exact even though content-visibility means
-   scrollHeight is partly estimated (pinning via scrollTop = scrollHeight
-   lands mid-line in Firefox) — and its height keeps the last line clear of
-   the horizontal scrollbar. */
-#log-anchor { height: 12px; }
+/* The permanent last element of the log view, kept at zero height: pinning to
+   the bottom scrolls it into view, which is exact even though
+   content-visibility means scrollHeight is partly estimated (pinning via
+   scrollTop = scrollHeight lands mid-line in Firefox). */
+#log-anchor { height: 0; }
 #logview.wrap { white-space: pre-wrap; }
 
 /* Lines highlight subtly on hover and warmly when selected (click; ctrl adds,

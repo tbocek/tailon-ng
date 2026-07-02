@@ -17,8 +17,9 @@
 Tailon-ng is a webapp for looking at and searching through log files from your
 browser. It serves files — single files, globs or whole directories — and lets
 you **tail** them live or **grep** through them, with a regular-expression
-filter. Reading, following and filtering are all done
-natively in Go: tailon-ng never shells out to `tail`, `grep` or any other tool.
+search. Reading, following and searching are all done
+natively in Go and in the browser: tailon-ng never shells out to `tail`,
+`grep` or any other tool.
 It is almost entirely Go standard library — the only third-party code is two
 small, pure-Go decompression libraries ([ulikunitz/xz] and [klauspost/compress]
 for zstd) used to read rotated archives — and ships as a single static binary.
@@ -27,8 +28,8 @@ for zstd) used to read rotated archives — and ships as a single static binary.
 anyone who can reach its port can read the files it serves, so bind it to
 localhost (`-b 127.0.0.1:8080`) or put it behind an authenticating reverse proxy.
 And it **never shells out** to `grep`, `sed`, `awk` or anything else — tailing
-and filtering run in-process in Go ([RE2]), so nothing typed in the UI can reach
-a shell. More in [Security](#security).
+and searching run in-process in Go ([RE2]) or in the browser, so nothing typed
+in the UI can reach a shell. More in [Security](#security).
 
 ## How this fork differs from the original
 
@@ -73,12 +74,12 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
 **find** (the first matches per file, with context — **find-all** also searches
-rotated archives), or read whole with **view** (single files only). Tail can
-be narrowed with a server-side regular-expression **filter**; in view the same
-input is a browser-side **search**: matching lines and the matched text
-highlight as you type — nothing is hidden — and Enter or the ▲▼ buttons step
-between matches. Opening a file from a find result carries the query along, so
-its matches arrive already highlighted, centered on the clicked line.
+rotated archives), or read whole with **view** (single files only). In tail
+and view the input is a browser-side **search**: matching lines and the
+matched text highlight as you type — nothing is hidden, and lines streaming in
+live are matched as they arrive — and Enter or the ▲▼ buttons step between
+matches. Opening a file from a find result carries the query along, so its
+matches arrive already highlighted, centered on the clicked line.
 Tailon-ng itself is configured entirely with command-line flags.
 
 To get started, run tailon-ng with the files or directories you want to monitor.
@@ -116,18 +117,17 @@ so nothing is ever missed.
 
 The frontend exploits the fact that log files are **append-only**: every
 single-file view is cached in the browser together with the byte offset read so
-far, keyed by file, mode and filter. Switching between files, or between tail
+far, keyed by file and mode. Switching between files, searches, or between tail
 and view, re-renders instantly from the cache and asks the server only for the
 bytes that arrived since — and a fully-read archive is never requested again.
 If a file shrank or was replaced (rotation), the server signals a reset and the
 view rebuilds from scratch.
 
 View loads show a real **0–100 progress bar** — a thin line under the toolbar
-driven by the server's byte progress (lines the filter drops still advance it,
-since it measures bytes read; compressed archives report the compressed bytes
-consumed). A view never ships more than the browser keeps: the server reads
-the whole file (that is what the bar tracks) but sends only the last 50,000
-lines after filtering, so viewing a huge archive doesn't push millions of
+driven by the server's byte progress (compressed archives report the
+compressed bytes consumed). A view never ships more than the browser keeps:
+the server reads the whole file (that is what the bar tracks) but sends only
+the last 50,000 lines, so viewing a huge archive doesn't push millions of
 lines over the wire that the scrollback would discard anyway. While a load
 streams in, the view holds still instead of chasing the bottom, then jumps to
 the end once at EOF — unless you already started scrolling. The toolbar's
@@ -210,9 +210,10 @@ exactly the files you point it at. Bind it to localhost (`-b 127.0.0.1:8080`) or
 put it behind an authenticating reverse proxy. It is a log viewer, not a gateway.
 
 **No shell, no external commands.** Tailon-ng never runs `tail`, `grep`, `sed`,
-`awk` or any subprocess; reading, following and filtering are all done in-process
-in Go. The UI filter is a Go ([RE2]) regular expression, so nothing entered in
-the browser can cause shell or command injection.
+`awk` or any subprocess; reading, following and find are all done in-process in
+Go (search-as-you-type runs in the browser). The find query is a Go ([RE2])
+regular expression, so nothing entered in the browser can cause shell or
+command injection.
 
 **Safe downloads.** Files are served as plain-text attachments with
 `X-Content-Type-Options: nosniff`, so a log line that happens to look like HTML
@@ -233,7 +234,7 @@ talks to the backend over Server-Sent Events.
 
 The backend is written in straightforward Go, almost entirely standard library:
 flag parsing, configuration, HTTP serving, access logging, file following,
-regexp filtering and gzip/bzip2 decoding for the Server-Sent Events stream. The
+server-side find and gzip/bzip2 decoding for the Server-Sent Events stream. The
 only third-party dependencies are [ulikunitz/xz] and [klauspost/compress],
 which decode `.xz` and `.zst` archives. File reading and following live in
 `tailer.go`; the inotify wake-up path (Linux, raw `syscall` — no dependency) in

@@ -313,13 +313,12 @@ type logLine struct {
 //	        whole file once, from the start, without following — the UI's
 //	        "view", single files only. Aggregate streams are always tailed
 //	        and skip rotated/compressed files (grep the archives with /find).
-//	filter  optional regular expression; only matching lines are sent.
 //	nlines  in tail mode, how many trailing lines to show before following. In
-//	        view mode, a cap: at most the last nlines (filtered) lines are
-//	        sent — the client discards anything past its scrollback anyway, so
-//	        a huge archive doesn't push millions of lines over the wire. The
-//	        whole file is still read (that is what drives the progress bar);
-//	        0 sends every line.
+//	        view mode, a cap: at most the last nlines lines are sent — the
+//	        client discards anything past its scrollback anyway, so a huge
+//	        archive doesn't push millions of lines over the wire. The whole
+//	        file is still read (that is what drives the progress bar); 0 sends
+//	        every line.
 //	path    the file to stream, or all=1 for every served file.
 //	scope   with all=1, limit the stream to files under this directory prefix.
 //	offset  resume a single-file stream from this byte offset. Served files
@@ -330,8 +329,8 @@ type logLine struct {
 //
 // Each line is one SSE "data:" frame holding a JSON object: "t" is the line's
 // text, "p" (multi-file streams) the file it came from, and "o" (single-file
-// streams) the byte offset to resume from after this line. Reading, following
-// and filtering are all done in Go.
+// streams) the byte offset to resume from after this line. Reading and
+// following are all done in Go; searching the lines happens in the browser.
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	query := r.URL.Query()
@@ -343,16 +342,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	follow := mode != "grep" // "tail" (default) follows; "grep" reads once
 	nlines, _ := strconv.Atoi(query.Get("nlines"))
-
-	var filter *regexp.Regexp
-	if expr := query.Get("filter"); expr != "" {
-		re, err := regexp.Compile(expr)
-		if err != nil {
-			http.Error(w, "invalid filter: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		filter = re
-	}
 
 	// Resolve the files to stream. "all=1" tails every served file at once —
 	// viewing (grep) a merged dump of several files is not useful, so it is
@@ -424,10 +413,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Progress for view loads (single-file by construction — aggregate streams
 	// always follow): total is the file's on-disk size, and each line's pos
-	// advances the "done" count — including lines the filter drops, since
-	// progress measures bytes read, not lines shown. For compressed archives
-	// pos is the compressed-side position (see streamCompressed), so measured
-	// against the same on-disk size they too get a real 0-100 bar.
+	// advances the "done" count. For compressed archives pos is the
+	// compressed-side position (see streamCompressed), so measured against
+	// the same on-disk size they too get a real 0-100 bar.
 	var progTotal, progDone int64
 	progPct := -1
 	if !follow {
@@ -467,9 +455,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() { wg.Wait(); close(lines) }()
 
-	matches := func(text string) bool {
-		return filter == nil || filter.MatchString(text)
-	}
 	// In tail mode, each file reports once when its initial catch-up read is
 	// done; after the last one the client may hide its loading bar. This only
 	// concerns the initial load — the stream then just keeps following.
@@ -533,9 +518,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				if !progress(ln.pos) {
 					return
-				}
-				if !matches(ln.text) {
-					continue
 				}
 				if capped {
 					// Keep only the stream's tail, trimming in chunks so the
@@ -615,9 +597,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if caughtUp(ln) {
-				continue
-			}
-			if !matches(ln.text) {
 				continue
 			}
 			buf = append(buf, timedLine{ln, timestamp(ln)})

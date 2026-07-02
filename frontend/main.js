@@ -2,19 +2,19 @@
 
 // Tailon-ng frontend: framework-free vanilla JavaScript. It fetches the file list
 // and streams lines over Server-Sent Events. Modes: "tail" (follow) and "grep"
-// (whole file); a regexp filter (server-side) narrows the output.
-// Injected global: relativeRoot.
+// (whole file), both with a browser-side regexp search that highlights
+// matching lines; "find" greps server-side. Injected global: relativeRoot.
 
 const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "/";
-// "tail" follows live files (the input is a server-side filter); "find"
-// searches the selection server-side for the first matches per file with
-// context — bounded and fast on any file size; "find-all" also searches
-// rotated archives (.gz, .1, …), decoded server-side. "view" (wire value
-// "grep") shows a whole file: there the input is a browser-side search that
-// highlights matches as you type without hiding lines (see searchApply). It
-// is also what clicking a find result or a line's file prefix opens. View
-// works on single files only — for a group, a dump of several files
-// interleaved is not useful, so the option is disabled (see syncModeOptions).
+// "tail" follows live files; "find" searches the selection server-side for
+// the first matches per file with context — bounded and fast on any file
+// size; "find-all" also searches rotated archives (.gz, .1, …), decoded
+// server-side. "view" (wire value "grep") shows a whole file: it is also what
+// clicking a find result or a line's file prefix opens. In tail and view the
+// input is a browser-side search that highlights matches as you type without
+// hiding lines (see searchApply). View works on single files only — for a
+// group, a dump of several files interleaved is not useful, so the option is
+// disabled (see syncModeOptions).
 const MODES = [
     { value: "tail", label: "tail" },
     { value: "find", label: "find" },
@@ -31,19 +31,18 @@ const state = {
 };
 
 // Served files are append-only, so lines fetched once stay valid: single-file
-// views are cached per (file, mode, filter) along with the byte offset
-// read so far, and reconnecting re-renders the cache and asks the server only
-// for what follows. Archives are immutable — once read, they never re-fetch.
-// The server sends "event: reset" if a file shrank or was replaced.
+// streams are cached per (file, mode) along with the byte offset read so far,
+// and reconnecting re-renders the cache and asks the server only for what
+// follows. Archives are immutable — once read, they never re-fetch. The
+// server sends "event: reset" if a file shrank or was replaced.
 const MAX_CACHE_VIEWS = 20;
 const cache = new Map(); // key -> { lines: [], offset: -1, done: false }
 
 function cacheEntry() {
     // Only tail and view (wire value "grep") reach here; find renders results,
-    // not a line stream, and never caches. A tail entry is keyed by its
-    // server-side filter; a view is always the unfiltered file (searching
-    // happens in the browser), so every search shares one cached copy.
-    const key = JSON.stringify([state.file.path, state.mode, state.mode === "tail" ? state.filter : ""]);
+    // not a line stream, and never caches. Streams are always unfiltered
+    // (searching happens in the browser), so every search shares one copy.
+    const key = JSON.stringify([state.file.path, state.mode]);
     let entry = cache.get(key);
     if (entry) cache.delete(key); // re-insert, so eviction drops the least recent
     else entry = { lines: [], offset: -1, done: false };
@@ -231,6 +230,7 @@ const logview = {
                 span.classList.add("selected");
                 selAnchor = span;
             }
+            if (search.re) searchLine(span, search.re); // tail: match lines as they stream in
             frag.appendChild(span);
             this.lines.push(span);
         }
@@ -278,27 +278,23 @@ function connect() {
     setLoading(false);
     setStatus("");
 
-    // The one text input is a server-side line filter in tail, the query in
-    // the find modes, and in view a browser-side search that highlights
-    // matches as you type without hiding anything (see searchApply). The
-    // apply button serves tail and find; view gets prev/next steppers.
+    // The one text input is the query in the find modes (the button runs it)
+    // and a browser-side search everywhere else, highlighting matches as you
+    // type without hiding anything (see searchApply) with ▲▼ steppers.
     const finding = state.mode.indexOf("find") === 0;
-    const viewing = state.mode === "grep";
-    el["filter-input"].placeholder = finding ? "find (regexp)" : viewing ? "search (regexp)" : "filter (regexp)";
-    el["filter-apply"].textContent = finding ? "find" : "filter";
-    el["filter-apply"].hidden = viewing;
-    el["search-prev"].hidden = el["search-next"].hidden = !viewing;
+    el["filter-input"].placeholder = finding ? "find (regexp)" : "search (regexp)";
+    el["filter-apply"].hidden = !finding;
+    el["search-prev"].hidden = el["search-next"].hidden = finding;
     if (finding) { findRequest(); return; }
 
     // nlines: tail's initial backlog — and in view mode the cap: anything past
-    // the scrollback would be trimmed on arrival, so don't ask for it. Only
-    // tail filters server-side; a view always loads the file as-is, so every
-    // search shares the one stream (and the one cache entry).
+    // the scrollback would be trimmed on arrival, so don't ask for it. Streams
+    // are never filtered server-side (searching is browser-side), so every
+    // search shares the one stream and the one cache entry.
     const p = new URLSearchParams({
         mode: state.mode,
-        nlines: String(viewing ? MAX_LINES : TAIL_LINES),
+        nlines: String(state.mode === "tail" ? TAIL_LINES : MAX_LINES),
     });
-    if (!viewing && state.filter) p.set("filter", state.filter);
 
     let entry = null; // aggregate views are not cached: per-file offsets don't compose
     if (state.file.all) {
@@ -349,6 +345,7 @@ function connect() {
     });
     src.addEventListener("live", function () {
         setLoading(false); // tail's initial catch-up is rendered; now following
+        searchApply(); // highlight the search over the backlog; new lines match as they arrive
     });
     src.addEventListener("eof", function () {
         if (entry && state.file && state.file.stale) entry.done = true; // archives are immutable
@@ -356,7 +353,7 @@ function connect() {
         searchApply(); // view: highlight the search over the now-complete file
         if (logview.locate !== null) {
             // The whole file streamed and the jump target never appeared
-            // (rotated away, or outside the current filter).
+            // (rotated away, or past the view's line cap).
             logview.locate = null;
             toast("line not found");
         }
@@ -457,24 +454,36 @@ function commonPrefix(paths) {
     return p.slice(0, p.lastIndexOf("/") + 1);
 }
 
-// View-mode search: as you type (debounced), lines matching the regexp are
-// highlighted in place — nothing is hidden, unlike tail's server-side filter —
-// with the matched text wrapped in a <mark>. Enter / the ▲▼ buttons step
-// through the matching lines; clearing the input clears the highlights.
-// search.applied is the query the highlights were built from, so stepping can
-// re-apply first when the text changed since the last (debounced) run.
-const search = { hits: [], cur: -1, applied: null };
+// Tail/view search: as you type (debounced), lines matching the regexp are
+// highlighted in place — nothing is ever hidden — with the matched text
+// wrapped in a <mark>. Enter / the ▲▼ buttons step through the matching
+// lines; clearing the input clears the highlights. In tail, lines streaming
+// in are matched as they render (see logview.flush).
+//
+// The pass over the scrollback runs in ~12ms slices (setTimeout between
+// them), so a large buffer never blocks typing; a keystroke bumps search.gen,
+// which cancels the in-flight pass before the debounce starts the next one.
+// hits are the highlighted lines in order; stale holds lines whose highlights
+// belong to a superseded query and are removed, sliced as well, at the start
+// of the next pass. applied/re are the query the highlights were built from
+// (re non-null only while a valid query is active).
+const search = { hits: [], stale: [], cur: -1, applied: null, re: null, gen: 0 };
+
+function searchableMode() { return state.mode === "tail" || state.mode === "grep"; }
 
 function searchReset() {
+    search.gen++; // cancels an in-flight pass; the DOM it worked on is gone
     search.hits = [];
+    search.stale = [];
     search.cur = -1;
     search.applied = null;
+    search.re = null;
     updateSearchCount();
 }
 
 function updateSearchCount() {
     const n = search.hits.length;
-    el["search-count"].hidden = state.mode !== "grep" || search.applied === null;
+    el["search-count"].hidden = !searchableMode() || search.applied === null;
     el["search-count"].textContent =
         search.cur >= 0 ? (search.cur + 1) + "/" + n : n + (n === 1 ? " match" : " matches");
 }
@@ -516,37 +525,70 @@ function markText(entry, re) {
     }
 }
 
-// searchApply (re)builds the view search over the rendered lines: previous
-// highlights are cleared first, so removing the query deselects everything
-// and editing it keeps just the lines that still match.
+// searchLine tests one rendered line and highlights it if it matches the
+// active query. Already-highlighted lines are skipped, so calling it twice on
+// a line (live pass racing the scrollback trim) is harmless.
+function searchLine(entry, re) {
+    if (entry.classList.contains("hit")) return;
+    re.lastIndex = 0;
+    if (!re.test(entry.textContent)) return;
+    markText(entry, re);
+    entry.classList.add("hit");
+    search.hits.push(entry);
+}
+
+// searchApply (re)builds the search over the rendered lines: the previous
+// highlights are removed first (so clearing the query deselects everything,
+// and editing it keeps just the lines that still match), then every line is
+// tested and marked. Both phases yield after ~12ms and resume on a timeout,
+// abandoning the pass the moment search.gen moves on.
 function searchApply() {
-    for (const s of search.hits) {
-        s.classList.remove("hit", "current");
-        unmark(s);
-    }
+    const gen = ++search.gen;
+    search.stale = search.stale.concat(search.hits); // now-stale highlights to undo
     search.hits = [];
     search.cur = -1;
     search.applied = null;
-    if (state.mode === "grep" && state.filter) {
+    search.re = null;
+    if (searchableMode() && state.filter) {
         let re = null;
         try { re = new RegExp(state.filter, "g"); } catch (e) { /* incomplete regexp while typing */ }
         if (re) {
             search.applied = state.filter;
-            for (const entry of logview.lines) {
-                re.lastIndex = 0;
-                if (!re.test(entry.textContent)) continue;
-                markText(entry, re);
-                entry.classList.add("hit");
-                search.hits.push(entry);
-            }
+            search.re = re;
         }
     }
-    updateSearchCount();
+    let i = 0;
+    const step = function () {
+        if (gen !== search.gen) return; // superseded: the newer pass owns the cleanup
+        const t0 = performance.now();
+        while (search.stale.length) {
+            const s = search.stale.pop();
+            s.classList.remove("hit", "current");
+            unmark(s);
+            if (performance.now() - t0 > 12) { setTimeout(step, 0); return; }
+        }
+        // The live array, on purpose: lines that stream in mid-pass get
+        // scanned too. A concurrent scrollback trim may shift indexes — a
+        // re-scanned line is caught by searchLine's already-marked check, a
+        // skipped one by the next pass.
+        while (search.re && i < logview.lines.length) {
+            searchLine(logview.lines[i++], search.re);
+            if (performance.now() - t0 > 12) { updateSearchCount(); setTimeout(step, 0); return; }
+        }
+        updateSearchCount();
+    };
+    step();
 }
 
 // searchStep moves the current match by dir (±1, wrapping) and centers it.
 function searchStep(dir) {
     if (search.applied !== state.filter) searchApply(); // Enter right after typing: apply now
+    // The scrollback trim may have dropped hits from the DOM; prune them.
+    if (search.hits.some(function (s) { return !s.isConnected; })) {
+        const cur = search.cur >= 0 ? search.hits[search.cur] : null;
+        search.hits = search.hits.filter(function (s) { return s.isConnected; });
+        search.cur = cur ? search.hits.indexOf(cur) : -1;
+    }
     if (!search.hits.length) return;
     if (search.cur >= 0) search.hits[search.cur].classList.remove("current");
     search.cur = search.cur < 0
@@ -701,14 +743,11 @@ function updateDownload() {
     }
 }
 
-// applyFilter serves tail (reconnect with the new server-side filter) and find
-// (run the search). View never routes here — its input searches as you type.
+// applyFilter runs a find. Tail and view never route here — their input
+// searches browser-side as you type.
 function applyFilter() {
-    const changed = el["filter-input"].value !== state.filter;
-    const finding = state.mode.indexOf("find") === 0;
-    if (!changed && !finding) return; // tail: same filter, no reconnect
     state.filter = el["filter-input"].value;
-    connect(); // find re-runs even unchanged: Enter or the button means "search now"
+    connect(); // even unchanged: Enter or the button means "search now"
 }
 
 function init() {
@@ -717,27 +756,27 @@ function init() {
     el["mode-select"].onchange = function () { state.mode = el["mode-select"].value; connect(); };
 
     el["filter-input"].value = state.filter;
-    // View searches as you type, debounced; Enter steps to the next match
-    // (Shift+Enter to the previous), like a browser's find. Tail and find keep
-    // deliberate application: Enter or the button (and, for tail, focus loss).
+    // Tail and view search as you type, debounced; a keystroke immediately
+    // cancels the in-flight highlight pass (search.gen) so typing stays
+    // responsive on a large scrollback. Enter steps to the next match
+    // (Shift+Enter to the previous), like a browser's find. Find keeps
+    // deliberate application: Enter or the button.
     let searchTimer = 0;
     el["filter-input"].addEventListener("input", function () {
-        if (state.mode !== "grep") return;
+        if (!searchableMode()) return;
         state.filter = el["filter-input"].value;
+        search.gen++; // cancel the in-flight pass right away
         clearTimeout(searchTimer);
-        searchTimer = setTimeout(searchApply, 150);
+        searchTimer = setTimeout(searchApply, 300);
     });
     el["filter-input"].addEventListener("keyup", function (e) {
         if (e.key !== "Enter") return;
-        if (state.mode === "grep") {
+        if (searchableMode()) {
             clearTimeout(searchTimer);
             searchStep(e.shiftKey ? -1 : 1); // re-applies first if the text changed
         } else {
             applyFilter();
         }
-    });
-    el["filter-input"].addEventListener("change", function () {
-        if (state.mode === "tail") applyFilter(); // focus loss applies the tail filter
     });
     el["filter-apply"].onclick = applyFilter;
     el["search-prev"].onclick = function () { searchStep(-1); };
