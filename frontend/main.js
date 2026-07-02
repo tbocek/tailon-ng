@@ -123,50 +123,65 @@ function appendAnsi(parent, text) {
     if (last < text.length) ansiEmit(parent, text.slice(last), style);
 }
 
-// Log view: append-only lines. Auto-scrolls to the bottom while you're already
-// at the bottom (so new logs keep filling the screen), and caps the buffer.
+// Log view: append-only lines, auto-scrolling while you're at the bottom.
+// Rendering is batched per animation frame: incoming lines queue in `pending`
+// and flush as one DocumentFragment with a single scroll check. The naive way —
+// append and scroll-check per line — forces a reflow for every line, and grep
+// delivers tens of thousands of lines per second; likewise, trimming the
+// scrollback with shift()/removeChild per line costs O(buffer) per line once
+// the cap is reached. Batching plus chunked splicing keeps both amortized.
+const TRIM_CHUNK = 1000; // trim the scrollback this many lines at a time
 const logview = {
-    lines: [],
+    lines: [], // rendered spans, oldest first
+    pending: [], // {path, text} queued for the next animation frame
+    raf: 0,
     atBottom: function () {
         const p = el["scrollable"];
         return Math.abs(p.scrollTop - (p.scrollHeight - p.offsetHeight)) < 50;
     },
-    clear: function () { el["logview"].replaceChildren(); this.lines = []; },
-    // write appends one line; path (set in multi-file streams) becomes a
-    // clickable prefix that jumps to grepping just that file.
-    write: function (path, text) {
-        const scroll = this.atBottom();
-        const span = document.createElement("span");
-        span.className = "log-entry";
-        if (path) {
-            const link = document.createElement("a");
-            link.className = "path-link";
-            link.textContent = stripPrefix(path);
-            link.title = "grep " + path;
-            link.onclick = function () { jumpToFile(path); };
-            span.appendChild(link);
-            span.appendChild(document.createTextNode(": "));
-        }
-        appendAnsi(span, text);
-        el["logview"].appendChild(span);
-        this.lines.push(span);
-        while (this.lines.length > MAX_LINES) el["logview"].removeChild(this.lines.shift());
-        if (scroll) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+    clear: function () {
+        if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+        this.pending = [];
+        el["logview"].replaceChildren();
+        this.lines = [];
     },
-    // writeAll renders a cached view in one DOM operation (a reconnect can
-    // replay tens of thousands of lines; appending one by one would jank).
-    writeAll: function (texts) {
+    // write queues one line; path (set in multi-file streams) becomes a
+    // clickable prefix that jumps to grepping just that file (one delegated
+    // click listener in init handles all of them — no per-line closure).
+    write: function (path, text) {
+        this.pending.push({ path: path, text: text });
+        // A hidden tab gets no animation frames; keep the queue bounded.
+        if (this.pending.length > MAX_LINES + TRIM_CHUNK) {
+            this.pending.splice(0, this.pending.length - MAX_LINES);
+        }
+        if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
+    },
+    flush: function () {
+        this.raf = 0;
+        const scroll = this.atBottom();
         const frag = document.createDocumentFragment();
-        for (const text of texts) {
+        for (const ln of this.pending) {
             const span = document.createElement("span");
             span.className = "log-entry";
-            appendAnsi(span, text);
+            if (ln.path) {
+                const link = document.createElement("a");
+                link.className = "path-link";
+                link.textContent = stripPrefix(ln.path);
+                link.title = "grep " + ln.path;
+                link.dataset.path = ln.path;
+                span.appendChild(link);
+                span.appendChild(document.createTextNode(": "));
+            }
+            appendAnsi(span, ln.text);
             frag.appendChild(span);
             this.lines.push(span);
         }
+        this.pending = [];
         el["logview"].appendChild(frag);
-        while (this.lines.length > MAX_LINES) el["logview"].removeChild(this.lines.shift());
-        el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+        if (this.lines.length > MAX_LINES + TRIM_CHUNK) {
+            for (const old of this.lines.splice(0, this.lines.length - MAX_LINES)) old.remove();
+        }
+        if (scroll) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
     },
 };
 
@@ -187,7 +202,7 @@ function connect() {
     } else {
         p.set("path", state.file.path);
         entry = cacheEntry();
-        logview.writeAll(entry.lines); // replay instantly what we already have
+        for (const t of entry.lines) logview.write(null, t); // replay the cache (one batched flush)
         if (entry.done) return; // a fully-read archive never grows: no request at all
         if (entry.offset >= 0) p.set("offset", String(entry.offset));
     }
@@ -200,7 +215,9 @@ function connect() {
         const d = JSON.parse(e.data);
         if (entry) {
             entry.lines.push(d.t);
-            if (entry.lines.length > MAX_LINES) entry.lines.shift();
+            if (entry.lines.length > MAX_LINES + TRIM_CHUNK) {
+                entry.lines.splice(0, entry.lines.length - MAX_LINES); // chunked, not per line
+            }
             if (d.o) entry.offset = d.o;
         }
         logview.write(d.p, d.t);
@@ -326,6 +343,12 @@ function init() {
     el["filter-input"].addEventListener("keyup", function (e) { if (e.key === "Enter") applyFilter(); }); // Enter applies
     el["filter-input"].addEventListener("change", applyFilter); // and so does focus loss
     el["filter-apply"].onclick = applyFilter;
+
+    // One delegated listener serves every per-line path prefix (logview.flush
+    // tags each link with data-path instead of attaching a closure per line).
+    el["logview"].addEventListener("click", function (e) {
+        if (e.target.classList.contains("path-link")) jumpToFile(e.target.dataset.path);
+    });
 
     el["file-select"].addEventListener("focus", refreshFiles);
     el["file-select"].onchange = function () {
