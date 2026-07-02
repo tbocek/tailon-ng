@@ -73,9 +73,13 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
 **find** (the first matches per file, with context — **find-all** also searches
-rotated archives), or read whole with **view** (single files only). Tail and
-view can be narrowed with an optional regular-expression **filter** (all set in
-the UI). Tailon-ng itself is configured entirely with command-line flags.
+rotated archives), or read whole with **view** (single files only). Tail can
+be narrowed with a server-side regular-expression **filter**; in view the same
+input is a browser-side **search**: matching lines and the matched text
+highlight as you type — nothing is hidden — and Enter or the ▲▼ buttons step
+between matches. Opening a file from a find result carries the query along, so
+its matches arrive already highlighted, centered on the clicked line.
+Tailon-ng itself is configured entirely with command-line flags.
 
 To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a

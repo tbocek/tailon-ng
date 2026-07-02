@@ -105,6 +105,7 @@ body {
 #toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; min-width: 7em; }
 #filter-input { flex: 1 1 auto; min-width: 3em; text-align: left; }
 #filter-input::placeholder { color: #888; font-style: italic; }
+#search-count { color: #8a8f98; font-size: 12px; white-space: nowrap; }
 
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }
@@ -175,6 +176,21 @@ body {
     box-shadow: inset 3px 0 0 var(--notice);
 }
 #logview .log-entry.selected:hover { background: rgba(255, 151, 79, 0.24); }
+
+/* View search (and find results): the matched text gets a <mark>, matching
+   lines a faint warm tint, and the current match — stepped through with ▲▼ or
+   Enter — the strong selected look. Nothing is hidden. */
+#logview mark {
+    background: rgba(240, 198, 116, 0.35);
+    color: inherit;
+    border-radius: 2px;
+}
+#logview .log-entry.hit { background: rgba(255, 151, 79, 0.08); }
+#logview .log-entry.hit:hover { background: rgba(255, 151, 79, 0.14); }
+#logview .log-entry.current {
+    background: rgba(255, 151, 79, 0.2);
+    box-shadow: inset 3px 0 0 var(--notice);
+}
 
 /* The per-line file prefix in multi-file streams: click to open that file. */
 #logview .path-link { color: #8a8f98; cursor: pointer; }
