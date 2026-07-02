@@ -55,8 +55,8 @@ func TestListingFiles(t *testing.T) {
 	if got := paths(lst); !reflect.DeepEqual(got, want) {
 		t.Fatalf("paths = %q, want %q", got, want)
 	}
-	if !lst[0].Exists {
-		t.Fatal("expected 1.log to be marked as existing")
+	if lst[0].Stale {
+		t.Fatal("expected 1.log to be live, not stale")
 	}
 }
 

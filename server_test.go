@@ -23,7 +23,7 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	c := defaultConfig()
-	if len(c.BindAddr) != 1 || c.BindAddr[0] != ":8080" {
+	if c.BindAddr != ":8080" {
 		t.Errorf("BindAddr = %v", c.BindAddr)
 	}
 	if c.RelativeRoot != "/" {
@@ -77,10 +77,11 @@ func TestListingNoRace(t *testing.T) {
 }
 
 // sseFrame mirrors the JSON object sent per line: T is the text, P the source
-// file (set only in multi-file streams).
+// file (multi-file streams), O the resume offset (single-file streams).
 type sseFrame struct {
 	P string `json:"p"`
 	T string `json:"t"`
+	O int64  `json:"o"`
 }
 
 // readSSEData reads up to n SSE "data:" frames from r, failing after timeout.
@@ -91,7 +92,7 @@ func readSSEData(t *testing.T, r io.Reader, n int, timeout time.Duration) []sseF
 		var frames []sseFrame
 		scanner := bufio.NewScanner(r)
 		for len(frames) < n && scanner.Scan() {
-			if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok && data != "" {
 				var f sseFrame
 				if err := json.Unmarshal([]byte(data), &f); err != nil {
 					t.Errorf("bad SSE frame %q: %v", data, err)
@@ -438,6 +439,73 @@ func TestStaleForcedToGrep(t *testing.T) {
 	}
 }
 
+// TestStreamResume checks the append-only resume protocol: frames carry the
+// byte offset past each line, and offset=N streams only what follows N.
+func TestStreamResume(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.log")
+	if err := os.WriteFile(path, []byte("1\n2\n3\n"), 0o644); err != nil { // 6 bytes
+		t.Fatal(err)
+	}
+	config = defaultConfig()
+	config.Sources = []string{path}
+	createListing(config.Sources)
+
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	// Full read: offsets 2, 4, 6.
+	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := readSSEData(t, resp.Body, 3, 5*time.Second)
+	resp.Body.Close()
+	for i, wantPos := range []int64{2, 4, 6} {
+		if frames[i].O != wantPos {
+			t.Errorf("frame %d offset = %d, want %d", i, frames[i].O, wantPos)
+		}
+	}
+
+	// Resume from byte 4: only the last line.
+	resp, err = http.Get(srv.URL + "?mode=grep&offset=4&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := frameTexts(readSSEData(t, resp.Body, 1, 5*time.Second))
+	resp.Body.Close()
+	if !reflect.DeepEqual(got, []string{"3"}) {
+		t.Fatalf("resume: got %v, want [3]", got)
+	}
+}
+
+// TestStreamReset checks that an offset beyond the file (truncated or replaced
+// since the client cached it) triggers a reset and a restart from the top.
+func TestStreamReset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.log")
+	if err := os.WriteFile(path, []byte("1\n2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config = defaultConfig()
+	config.Sources = []string{path}
+	createListing(config.Sources)
+
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=grep&offset=999&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body) // grep closes at EOF, so the body ends
+	resp.Body.Close()
+	if !strings.Contains(string(body), "event: reset") {
+		t.Fatalf("expected a reset event, got:\n%s", body)
+	}
+	if !strings.Contains(string(body), `"t":"1"`) {
+		t.Fatalf("expected the stream to restart from the top, got:\n%s", body)
+	}
+}
+
 func TestStreamRejectsUnknownFile(t *testing.T) {
 	setupConfig(t, "testdata/ex1/var/log/1.log")
 	w := httptest.NewRecorder()
@@ -465,8 +533,8 @@ func TestServerStack(t *testing.T) {
 
 	cases := []struct{ path, want string }{
 		{"/", `id="toolbar"`},
-		{"/vfs/dist/main.js", "EventSource"},
-		{"/vfs/dist/main.css", "log-entry"},
+		{"/vfs/main.js", "EventSource"},
+		{"/vfs/main.css", "log-entry"},
 		{"/list", "testdata/ex1/var/log/1.log"},
 	}
 	for _, tc := range cases {
@@ -494,7 +562,7 @@ func TestIndexHandler(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "vfs/dist/main.js") {
+	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "vfs/main.js") {
 		t.Fatal("index template did not render the expected content")
 	}
 }

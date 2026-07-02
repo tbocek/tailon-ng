@@ -18,6 +18,25 @@ const state = {
     prefix: "", // directory prefix shared by every served file, hidden in the UI
 };
 
+// Served files are append-only, so lines fetched once stay valid: single-file
+// views are cached per (file, mode, filter, invert) along with the byte offset
+// read so far, and reconnecting re-renders the cache and asks the server only
+// for what follows. Archives are immutable — once read, they never re-fetch.
+// The server sends "event: reset" if a file shrank or was replaced.
+const MAX_CACHE_VIEWS = 20;
+const cache = new Map(); // key -> { lines: [], offset: -1, done: false }
+
+function cacheEntry() {
+    const m = state.mode === "tail" ? "tail" : "grep"; // grep-all == grep for one file
+    const key = JSON.stringify([state.file.path, m, state.filter, state.invert]);
+    let entry = cache.get(key);
+    if (entry) cache.delete(key); // re-insert, so eviction drops the least recent
+    else entry = { lines: [], offset: -1, done: false };
+    cache.set(key, entry);
+    while (cache.size > MAX_CACHE_VIEWS) cache.delete(cache.keys().next().value);
+    return entry;
+}
+
 const el = {};
 [
     "file-select", "mode-select", "filter-input", "filter-apply",
@@ -134,6 +153,21 @@ const logview = {
         while (this.lines.length > MAX_LINES) el["logview"].removeChild(this.lines.shift());
         if (scroll) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
     },
+    // writeAll renders a cached view in one DOM operation (a reconnect can
+    // replay tens of thousands of lines; appending one by one would jank).
+    writeAll: function (texts) {
+        const frag = document.createDocumentFragment();
+        for (const text of texts) {
+            const span = document.createElement("span");
+            span.className = "log-entry";
+            appendAnsi(span, text);
+            frag.appendChild(span);
+            this.lines.push(span);
+        }
+        el["logview"].appendChild(frag);
+        while (this.lines.length > MAX_LINES) el["logview"].removeChild(this.lines.shift());
+        el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+    },
 };
 
 function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
@@ -145,19 +179,41 @@ function connect() {
 
     const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(TAIL_LINES) });
     if (state.invert) p.set("invert", "1");
+
+    let entry = null; // aggregate views are not cached: per-file offsets don't compose
     if (state.file.all) {
         p.set("all", "1");
         if (state.file.scope) p.set("scope", state.file.scope); // one subfolder only
     } else {
         p.set("path", state.file.path);
+        entry = cacheEntry();
+        logview.writeAll(entry.lines); // replay instantly what we already have
+        if (entry.done) return; // a fully-read archive never grows: no request at all
+        if (entry.offset >= 0) p.set("offset", String(entry.offset));
     }
 
     setStatus("connecting…");
     const src = new EventSource(RELATIVE_ROOT + "stream?" + p.toString());
     state.source = src;
     src.onopen = function () { setStatus(""); };
-    src.onmessage = function (e) { const d = JSON.parse(e.data); logview.write(d.p, d.t); };
-    src.addEventListener("eof", function () { src.close(); state.source = null; setStatus(""); });
+    src.onmessage = function (e) {
+        const d = JSON.parse(e.data);
+        if (entry) {
+            entry.lines.push(d.t);
+            if (entry.lines.length > MAX_LINES) entry.lines.shift();
+            if (d.o) entry.offset = d.o;
+        }
+        logview.write(d.p, d.t);
+    };
+    src.addEventListener("reset", function () {
+        // The file shrank or was replaced: everything cached is invalid.
+        if (entry) { entry.lines = []; entry.offset = -1; }
+        logview.clear();
+    });
+    src.addEventListener("eof", function () {
+        if (entry && state.file && state.file.stale) entry.done = true; // archives are immutable
+        src.close(); state.source = null; setStatus("");
+    });
     src.onerror = function () { setStatus("reconnecting…"); };
 }
 

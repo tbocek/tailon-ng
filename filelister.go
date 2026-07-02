@@ -7,18 +7,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // ListEntry is an entry that appears in the UI file input. createListing turns
 // the configured sources into one ListEntry per served file, which the backend
 // sends to the client.
 type ListEntry struct {
-	Path    string    `json:"path"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"mtime"`
-	Exists  bool      `json:"exists"`
-	Stale   bool      `json:"stale"` // rotated/compressed: no longer written to
+	Path  string `json:"path"`
+	Stale bool   `json:"stale"` // rotated/compressed: no longer written to
 }
 
 // staleRE matches the file-name shapes log rotation leaves behind: a compressed
@@ -28,21 +24,6 @@ type ListEntry struct {
 var staleRE = regexp.MustCompile(`(?i)(\.(gz|bz2|xz|zst)|\.\d+|[.-]\d{8}|\.(old|bak))$`)
 
 func isStale(path string) bool { return staleRE.MatchString(path) }
-
-func fileInfo(path string) *ListEntry {
-	entry := ListEntry{}
-	entry.Path = path
-	entry.Stale = isStale(path)
-
-	info, err := os.Stat(path)
-	if !os.IsNotExist(err) {
-		entry.Exists = true
-		entry.Size = info.Size()
-		entry.ModTime = info.ModTime()
-	}
-
-	return &entry
-}
 
 // allFiles is the set of files currently served. It is guarded by allFilesMu
 // because createListing rebuilds it (on every /list request) while the stream
@@ -66,7 +47,7 @@ func createListing(sources []string) []*ListEntry {
 			return
 		}
 		files[p] = true
-		res = append(res, fileInfo(p))
+		res = append(res, &ListEntry{Path: p, Stale: isStale(p)})
 	}
 	// addPath serves one path: a directory is walked recursively, anything else
 	// is added as a single file (which need not exist yet).

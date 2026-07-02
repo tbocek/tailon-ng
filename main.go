@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 )
 
 const scriptDescription = `
@@ -28,6 +27,9 @@ appear. Several paths can be given as separate arguments or comma-separated.
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
 but excluded from live tailing and plain grep. The web UI's grep-all mode also
 searches them, decompressed transparently.
+
+On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
+filesystems without notification support, tailon-ng falls back to polling.
 
 Example usage:
   tailon-ng /var/log/syslog /var/log/auth.log
@@ -59,7 +61,7 @@ func gatherSources(args []string) []string {
 // Config contains all backend and frontend configuration options and relevant state.
 type Config struct {
 	RelativeRoot string
-	BindAddr     []string
+	BindAddr     string
 
 	Sources []string
 }
@@ -69,7 +71,7 @@ type Config struct {
 func defaultConfig() *Config {
 	return &Config{
 		RelativeRoot: "/",
-		BindAddr:     []string{":8080"},
+		BindAddr:     ":8080",
 	}
 }
 
@@ -78,18 +80,15 @@ var config = &Config{}
 func main() {
 	config = defaultConfig()
 
-	var (
-		printHelp bool
-		bindAddr  = strings.Join(config.BindAddr, ",")
-	)
+	var printHelp bool
 
 	// The standard library flag package accepts both -name and --name. Register
 	// a long and a short name for each option so that e.g. --bind and -b are
 	// equivalent.
 	flag.BoolVar(&printHelp, "help", false, "Show this help message and exit")
 	flag.BoolVar(&printHelp, "h", false, "Show this help message and exit")
-	flag.StringVar(&bindAddr, "bind", bindAddr, "Address and port to listen on")
-	flag.StringVar(&bindAddr, "b", bindAddr, "Address and port to listen on")
+	flag.StringVar(&config.BindAddr, "bind", config.BindAddr, "Address and port to listen on")
+	flag.StringVar(&config.BindAddr, "b", config.BindAddr, "Address and port to listen on")
 	flag.StringVar(&config.RelativeRoot, "relative-root", config.RelativeRoot, "Webapp relative root")
 	flag.StringVar(&config.RelativeRoot, "r", config.RelativeRoot, "Webapp relative root")
 
@@ -106,8 +105,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	config.BindAddr = strings.Split(bindAddr, ",")
-
 	// Ensure that relative root is always '/' or '/$arg/'.
 	config.RelativeRoot = "/" + strings.TrimLeft(config.RelativeRoot, "/")
 	config.RelativeRoot = strings.TrimRight(config.RelativeRoot, "/") + "/"
@@ -121,20 +118,16 @@ func main() {
 	log.Print("Generate initial file listing")
 	createListing(config.Sources)
 
-	var wg sync.WaitGroup
-	for _, addr := range config.BindAddr {
-		wg.Add(1)
-		go startServer(config, addr)
-	}
-	wg.Wait()
-
+	startServer(config, config.BindAddr)
 }
 
+// startServer serves forever on bindAddr — a TCP "host:port" address, or a
+// filesystem path to bind a unix socket (useful behind a reverse proxy).
 func startServer(config *Config, bindAddr string) {
-	loggerHTML := log.New(os.Stdout, "", log.LstdFlags)
-	loggerHTML.Printf("Server start, relative-root: %s, bind-addr: %s\n", config.RelativeRoot, bindAddr)
+	logger := log.New(os.Stdout, "", log.LstdFlags)
+	logger.Printf("Server start, relative-root: %s, bind-addr: %s\n", config.RelativeRoot, bindAddr)
 
-	server := setupServer(config, bindAddr, loggerHTML)
+	server := setupServer(config, bindAddr, logger)
 
 	if strings.Contains(bindAddr, ":") {
 		server.ListenAndServe()

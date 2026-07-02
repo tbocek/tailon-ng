@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,11 +20,20 @@ import (
 func setupRoutes(relativeroot string) *http.ServeMux {
 	router := http.NewServeMux()
 
-	// Serve the embedded frontend assets (see frontend.go).
+	// Serve the embedded frontend assets (see frontend.go). Only the two real
+	// web assets are exposed: the Go templates living beside them are
+	// server-side input, and there is no directory to browse.
 	staticHandler := noCacheControl(http.FileServerFS(frontendAssets))
 	staticHandler = http.StripPrefix(relativeroot+"vfs/", staticHandler)
 
-	router.Handle(relativeroot+"vfs/", staticHandler)
+	router.HandleFunc(relativeroot+"vfs/", func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.URL.Path, relativeroot+"vfs/") {
+		case "main.css", "main.js":
+			staticHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
 	router.HandleFunc(relativeroot+"list", listHandler)
 	router.HandleFunc(relativeroot+"stream", streamHandler)
 	router.HandleFunc(relativeroot+"files/", downloadHandler)
@@ -49,9 +59,12 @@ func setupServer(config *Config, addr string, logger *log.Logger) *http.Server {
 	return &server
 }
 
+// indexTemplate is parsed once at startup — the templates are embedded in the
+// binary, so they cannot change while the process runs.
+var indexTemplate = template.Must(template.ParseFS(frontendAssets, "base.html", "tailon.html"))
+
 func indexHandler(w http.ResponseWriter, r *http.Request) {
-	t := template.Must(template.ParseFS(frontendAssets, "templates/base.html", "templates/tailon.html"))
-	t.Execute(w, config)
+	indexTemplate.Execute(w, config)
 }
 
 // listHandler returns the current file listing as JSON. The frontend fetches it
@@ -136,10 +149,12 @@ func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 const mergeInterval = 200 * time.Millisecond
 
 // logLine is one line of output tagged with the file it came from (used to
-// prefix lines when several files are streamed at once).
+// prefix lines when several files are streamed at once) and the byte offset
+// just past it (-1 when unknown; used by the client's resume cache).
 type logLine struct {
 	path string
 	text string
+	pos  int64
 }
 
 // streamHandler streams a file (or every served file, with all=1) to the client
@@ -154,10 +169,16 @@ type logLine struct {
 //	nlines  in tail mode, how many trailing lines to show before following.
 //	path    the file to stream, or all=1 for every served file.
 //	scope   with all=1, limit the stream to files under this directory prefix.
+//	offset  resume a single-file stream from this byte offset. Served files
+//	        only grow, so the client caches lines it has seen and re-requests
+//	        just the remainder. If the file shrank or was replaced since, an
+//	        "event: reset" frame tells the client to drop its cache, and the
+//	        stream restarts from the beginning.
 //
 // Each line is one SSE "data:" frame holding a JSON object: "t" is the line's
-// text and "p", present when several files are streamed at once, the file it
-// came from. Reading, following and filtering are all done in Go.
+// text, "p" (multi-file streams) the file it came from, and "o" (single-file
+// streams) the byte offset to resume from after this line. Reading, following
+// and filtering are all done in Go.
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	query := r.URL.Query()
@@ -214,12 +235,30 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		paths = []string{path}
 	}
 
+	// Resume support (single-file streams only): the client sends the byte
+	// offset it has cached up to. A file smaller than that offset was truncated
+	// or replaced, so the cache is invalid — signal reset and start over.
+	start, reset := int64(-1), false
+	if v := query.Get("offset"); v != "" && len(paths) == 1 {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			start = n
+			if fi, err := os.Stat(paths[0]); err != nil || fi.Size() < start {
+				start, reset = -1, true
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
 	w.WriteHeader(http.StatusOK)
 	rc.Flush()
+
+	if reset {
+		fmt.Fprint(w, "event: reset\ndata: \n\n")
+		rc.Flush()
+	}
 
 	ctx := r.Context()
 	multi := len(paths) > 1
@@ -231,9 +270,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(p string) {
 			defer wg.Done()
-			streamFile(ctx, p, follow, nlines, func(text string) {
+			streamFile(ctx, p, follow, nlines, start, func(text string, pos int64) {
 				select {
-				case lines <- logLine{p, text}:
+				case lines <- logLine{p, text, pos}:
 				case <-ctx.Done():
 				}
 			})
@@ -248,9 +287,12 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		frame := struct {
 			Path string `json:"p,omitempty"` // set when several files are streamed
 			Text string `json:"t"`
+			Pos  int64  `json:"o,omitempty"` // resume offset, single-file streams only
 		}{Text: ln.text}
 		if multi {
 			frame.Path = ln.path
+		} else if ln.pos > 0 {
+			frame.Pos = ln.pos
 		}
 		data, _ := json.Marshal(frame)
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {

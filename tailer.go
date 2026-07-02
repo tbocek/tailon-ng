@@ -18,12 +18,15 @@ import (
 // pollInterval is how often follow mode checks a file for newly appended data.
 const pollInterval = 250 * time.Millisecond
 
-// streamFile sends each line of the file at path to send. In follow mode it
+// streamFile sends each line of the file at path to send, along with the byte
+// offset just past that line (-1 when unknown) — the client caches lines and
+// resumes from the offset, since served files only ever grow. In follow mode it
 // first emits the last nlines lines, then streams appended lines until ctx is
-// cancelled, reopening the file when it is rotated (replaced) or truncated. In
-// non-follow mode it reads the whole file once, from the start, and returns at
-// EOF. This replaces shelling out to tail and grep.
-func streamFile(ctx context.Context, path string, follow bool, nlines int, send func(string)) {
+// cancelled, reopening the file when it is rotated (replaced) or truncated;
+// waiting for new data uses inotify where available (see watcher_linux.go) and
+// falls back to polling. In non-follow mode it reads the file once and returns
+// at EOF. start >= 0 resumes reading from that byte offset in either mode.
+func streamFile(ctx context.Context, path string, follow bool, nlines int, start int64, send func(string, int64)) {
 	// Compressed archives are decoded transparently and always read whole, from
 	// the start: they are rotation leftovers that will never grow, so following
 	// them (or sampling their trailing bytes) is meaningless.
@@ -33,19 +36,27 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, send 
 	}
 
 	var offset int64
-	if follow {
+	if start >= 0 {
+		offset = start // resume: the client already holds everything before this
+	} else if follow {
 		lines, size := lastLines(path, nlines)
 		for _, line := range lines {
 			if ctx.Err() != nil {
 				return
 			}
-			send(line)
+			send(line, size) // the whole batch ends at size; that's the resume point
 		}
 		offset = size
 	}
 
 	var partial []byte
 	var prev os.FileInfo
+
+	var w *fileWatch
+	if follow {
+		w = watchFile(path)
+		defer w.close()
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -57,7 +68,7 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, send 
 			if !follow {
 				return
 			}
-			if !sleep(ctx, pollInterval) {
+			if !w.wait(ctx) {
 				return
 			}
 			continue
@@ -69,6 +80,9 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, send 
 			if (prev != nil && !os.SameFile(info, prev)) || info.Size() < offset {
 				offset = 0
 				partial = nil
+				if w != nil {
+					w.rewatch() // the watch followed the old inode; re-attach by path
+				}
 			}
 			prev = info
 		}
@@ -78,6 +92,8 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, send 
 		f.Close()
 		offset += int64(len(data))
 
+		// offset is now the absolute position of the end of data, so the
+		// position just past each line is offset minus what remains unconsumed.
 		data = append(partial, data...)
 		partial = nil
 		for {
@@ -86,18 +102,19 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, send 
 				if follow {
 					partial = data // hold an unterminated line until its newline arrives
 				} else if len(data) > 0 {
-					send(strings.TrimRight(string(data), "\r"))
+					send(strings.TrimRight(string(data), "\r"), offset)
 				}
 				break
 			}
-			send(strings.TrimRight(string(data[:i]), "\r"))
+			line := strings.TrimRight(string(data[:i]), "\r")
 			data = data[i+1:]
+			send(line, offset-int64(len(data)))
 		}
 
 		if !follow {
 			return
 		}
-		if !sleep(ctx, pollInterval) {
+		if !w.wait(ctx) {
 			return
 		}
 	}
@@ -120,9 +137,11 @@ func decoder(path string) func(io.Reader) (io.Reader, error) {
 	return nil
 }
 
-// streamCompressed sends each line of a compressed archive, decoded. Reading is
-// line-buffered rather than whole-file, so large archives don't sit in memory.
-func streamCompressed(ctx context.Context, path string, send func(string)) {
+// streamCompressed sends each line of a compressed archive, decoded, with no
+// byte offsets (-1): archives are immutable, so the client caches them whole
+// and never resumes mid-way. Reading is line-buffered rather than whole-file,
+// so large archives don't sit in memory.
+func streamCompressed(ctx context.Context, path string, send func(string, int64)) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -131,7 +150,7 @@ func streamCompressed(ctx context.Context, path string, send func(string)) {
 
 	r, err := decoder(path)(f)
 	if err != nil {
-		send("tailon-ng: cannot decompress " + path + ": " + err.Error())
+		send("tailon-ng: cannot decompress "+path+": "+err.Error(), -1)
 		return
 	}
 
@@ -140,7 +159,7 @@ func streamCompressed(ctx context.Context, path string, send func(string)) {
 		line, err := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" || err == nil {
-			send(line)
+			send(line, -1)
 		}
 		if err != nil {
 			return

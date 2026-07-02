@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Tailon-ng — a tiny, dependency-free log viewer</title>
-    <meta name="description" content="Tailon-ng is a minimal web viewer that tails and greps your log files from the browser. A single static binary, about 1,200 lines of code, almost entirely Go standard library.">
+    <meta name="description" content="Tailon-ng is a minimal web viewer that tails and greps your log files from the browser. A single static binary, about 1,400 lines of code, almost entirely Go standard library.">
     <style>
         :root {
             --bg: #1d1f21; --panel: #282a2e; --fg: #c5c8c6; --muted: #8a8f98;
@@ -88,7 +88,7 @@
         </div>
         <div class="card">
             <h3>Minimal code</h3>
-            <p>About 1,200 lines of code, total. Small enough to read in one sitting and audit before you run it on a server.</p>
+            <p>About 1,400 lines of code, total. Small enough to read in one sitting and audit before you run it on a server.</p>
         </div>
         <div class="card">
             <h3>Single binary</h3>
@@ -107,8 +107,12 @@
             <p>Rotated archives (<code>.gz</code>, <code>.xz</code>, <code>.zst</code>, <code>.1</code>, date-stamped) never pollute live tailing. Select one to grep it decoded, or use <b>grep-all</b> to search live logs and every archive at once.</p>
         </div>
         <div class="card">
-            <h3>Stream over SSE</h3>
-            <p>Lines arrive live over Server-Sent Events and auto-scroll while you're at the bottom — like a terminal, but in a browser tab.</p>
+            <h3>Instant, over SSE</h3>
+            <p>On Linux, appended lines are pushed in <b>milliseconds</b> via inotify (polling fallback elsewhere) and arrive over Server-Sent Events, auto-scrolling while you're at the bottom — like a terminal, but in a browser tab.</p>
+        </div>
+        <div class="card">
+            <h3>Append-aware caching</h3>
+            <p>Logs only grow, so the browser caches what it fetched: switching files or modes re-renders instantly and requests <b>only the new bytes</b>. A fully-read archive is never fetched twice.</p>
         </div>
     </div>
 

@@ -99,6 +99,21 @@ tailing, so compressed bytes never pollute the stream. Selecting one greps it
 with the compression decoded transparently, and the **grep-all** mode searches
 live files *and* every archive together.
 
+Tailing is push-based on Linux: appended lines reach the browser in
+milliseconds via **inotify** (through the standard library's `syscall` package
+— no extra dependency), with a polling fallback wherever notifications aren't
+available (other platforms, network filesystems, watch-limit exhaustion). The
+notification only *wakes* the tailer; the read loop stays the source of truth,
+so nothing is ever missed.
+
+The frontend exploits the fact that log files are **append-only**: every
+single-file view is cached in the browser together with the byte offset read so
+far, keyed by file, mode and filter. Switching between files, or between tail
+and grep, re-renders instantly from the cache and asks the server only for the
+bytes that arrived since — and a fully-read archive is never requested again.
+If a file shrank or was replaced (rotation), the server signals a reset and the
+view rebuilds from scratch.
+
 The web UI's file selector includes an **All files** entry (selected by default)
 that streams every served file at once, each line prefixed by its file (click
 the prefix to jump into grepping that file) and the streams **merged in
@@ -148,6 +163,9 @@ Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
 but excluded from live tailing and plain grep. The web UI's grep-all mode also
 searches them, decompressed transparently.
 
+On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
+filesystems without notification support, tailon-ng falls back to polling.
+
 Example usage:
   tailon-ng /var/log/syslog /var/log/auth.log
   tailon-ng /var/log/nginx/,/var/log/apache/
@@ -177,11 +195,12 @@ can't be rendered as script in your browser.
 
 ### Frontend
 
-The frontend is plain, framework-free HTML, CSS and JavaScript. The static
-assets live in `frontend/dist` and the Go templates in `frontend/templates`;
-both are embedded into the binary at compile time with `//go:embed` (see
-`frontend.go`). There is no build step or toolchain — edit the files directly
-and rebuild the binary. The UI talks to the backend over Server-Sent Events.
+The frontend is plain, framework-free HTML, CSS and JavaScript: four flat files
+in `frontend/` (two Go templates, `main.css`, `main.js`), embedded into the
+binary at compile time with `//go:embed` (see `frontend.go`). The favicon is an
+inline SVG data URI in `base.html` — no image files at all. There is no build
+step or toolchain — edit the files directly and rebuild the binary. The UI
+talks to the backend over Server-Sent Events.
 
 ### Backend
 
@@ -190,7 +209,8 @@ flag parsing, configuration, HTTP serving, access logging, file following,
 regexp filtering and gzip/bzip2 decoding for the Server-Sent Events stream. The
 only third-party dependencies are [ulikunitz/xz] and [klauspost/compress],
 which decode `.xz` and `.zst` archives. File reading and following live in
-`tailer.go`.
+`tailer.go`; the inotify wake-up path (Linux, raw `syscall` — no dependency) in
+`watcher_linux.go`, with the polling fallback in `watcher_other.go`.
 
 ### TODO
 
@@ -235,11 +255,6 @@ the source of the recurring "wait, which tailon?" confusion:
 * [rtail]
 * [tailon-legacy]
 
-Attributions
-------------
-
-Tailon-ng's favicon was created from [this icon].
-
 ## License
 
 Tailon-ng is released under the terms of the [Apache 2.0 License].
@@ -253,7 +268,6 @@ Tailon-ng is released under the terms of the [Apache 2.0 License].
 [errorlog]:       http://www.psychogenic.com/en/products/Errorlog.php
 [log.io]:         http://logio.org/
 [rtail]:          http://rtail.org/
-[this icon]:      http://www.iconfinder.com/icondetails/15150/48/terminal_icon
 [RE2]:            https://github.com/google/re2/wiki/Syntax
 [ulikunitz/xz]:   https://github.com/ulikunitz/xz
 [klauspost/compress]: https://github.com/klauspost/compress
