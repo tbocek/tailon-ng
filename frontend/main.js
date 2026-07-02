@@ -168,6 +168,16 @@ const logview = {
         const p = el["scrollable"];
         return Math.abs(p.scrollTop - (p.scrollHeight - p.offsetHeight)) < 50;
     },
+    anchor: null, // the #log-anchor spacer, kept as the log view's last element (see init)
+    // append inserts rendered content above the anchor, which must stay last
+    // so pinBottom has something exact to align to.
+    append: function (node) { el["logview"].insertBefore(node, this.anchor); },
+    // pinBottom glues the view to the end. Setting scrollTop = scrollHeight
+    // relies on scrollHeight, which under content-visibility is partly
+    // estimated from placeholder line heights — Firefox then lands mid-line,
+    // clipping the last line. Scrolling the anchor into view forces exact
+    // layout at the bottom instead.
+    pinBottom: function () { this.anchor.scrollIntoView({ block: "end" }); },
     locate: null, // raw text to find, select and scroll to (set by jumpToFile)
     // While a grep loads, the view stays put — no per-frame bottom-sticking,
     // which costs a forced layout per frame on a large scrollback. A sweep
@@ -180,7 +190,7 @@ const logview = {
         this.pending = [];
         this.locate = null;
         selAnchor = null;
-        el["logview"].replaceChildren();
+        el["logview"].replaceChildren(this.anchor);
         this.lines = [];
         searchReset(); // the highlighted spans are gone with the rest
     },
@@ -225,7 +235,7 @@ const logview = {
             this.lines.push(span);
         }
         this.pending = [];
-        el["logview"].appendChild(frag);
+        this.append(frag);
         if (this.lines.length > MAX_LINES + TRIM_CHUNK) {
             for (const old of this.lines.splice(0, this.lines.length - MAX_LINES)) old.remove();
             // If the range anchor was trimmed away, a later shift+click should
@@ -236,10 +246,13 @@ const logview = {
             located.scrollIntoView({ block: "center" });
             this.userScrolled = true; // a deliberate jump: EOF must not yank to the bottom
         } else if (scroll) {
-            el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+            this.pinBottom();
         }
     },
 };
+logview.anchor = document.createElement("div");
+logview.anchor.id = "log-anchor";
+el["logview"].appendChild(logview.anchor);
 
 function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
 
@@ -350,7 +363,7 @@ function connect() {
         setLoading(false);
         // Fully loaded: jump to the end — unless the user started reading
         // (scrolled, or jumped to a line) while it streamed.
-        if (!logview.userScrolled) el["scrollable"].scrollTop = el["scrollable"].scrollHeight;
+        if (!logview.userScrolled) logview.pinBottom();
         src.close(); state.source = null; setStatus("");
     });
     src.onerror = function () { setStatus("reconnecting…"); };
@@ -425,7 +438,7 @@ function renderFind(results) {
             for (const t of m.after) addLine(t, "ctx");
         });
     }
-    el["logview"].appendChild(frag);
+    logview.append(frag);
     el["scrollable"].scrollTop = 0;
 }
 

@@ -133,20 +133,25 @@ body {
 }
 
 #scrollable { flex: 1 1 auto; overflow: auto; }
-/* Padding, not margin: a child's bottom margin is often left out of the
-   scrollable overflow region, so a gap made of margin can vanish when pinned
-   to the bottom. The larger bottom padding keeps the last line clear of the
-   horizontal scrollbar when the view follows the tail. A right gap can only
-   show at full right-scroll (or with wrap on) — lines wider than the window
-   are clipped by the scrollport itself, which no padding can inset. */
+/* A right gap can only show at full right-scroll (or with wrap on) — lines
+   wider than the window are clipped by the scrollport itself, which no
+   padding can inset. The bottom gap comes from #log-anchor below, not from
+   padding here: bottom-pinning scrolls that spacer into view. */
 #logview {
     font-family: var(--mono);
     font-size: 13px;
     line-height: 1.3;
-    padding: 4px 8px 12px;
+    padding: 4px 8px;
     white-space: pre;
     word-break: break-all;
 }
+
+/* The permanent last element of the log view. Pinning to the bottom scrolls
+   this spacer into view — exact even though content-visibility means
+   scrollHeight is partly estimated (pinning via scrollTop = scrollHeight
+   lands mid-line in Firefox) — and its height keeps the last line clear of
+   the horizontal scrollbar. */
+#log-anchor { height: 12px; }
 #logview.wrap { white-space: pre-wrap; }
 
 /* Lines highlight subtly on hover and warmly when selected (click; ctrl adds,
