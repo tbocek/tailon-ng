@@ -263,6 +263,40 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	multi := len(paths) > 1
 
+	// Progress for grep loads (the client renders a 0-100 bar under the
+	// toolbar): total is the on-disk size of every plain file to be read, and
+	// each line's byte offset advances the "done" count — including lines the
+	// filter drops, since progress measures bytes read, not lines shown.
+	// Compressed archives are left out (their decoded size is unknown up
+	// front); an archive-only load keeps the client's indeterminate sweep.
+	var progTotal, progDone int64
+	progPct := -1
+	progPos := map[string]int64{}
+	if !follow {
+		for _, p := range paths {
+			if decoder(p) == nil {
+				if fi, err := os.Stat(p); err == nil {
+					progTotal += fi.Size()
+				}
+			}
+		}
+	}
+	progress := func(path string, pos int64) bool {
+		if progTotal <= 0 || pos <= progPos[path] {
+			return true
+		}
+		progDone += pos - progPos[path]
+		progPos[path] = pos
+		if pct := int(progDone * 100 / progTotal); pct != progPct {
+			progPct = pct
+			if _, err := fmt.Fprintf(w, "event: progress\ndata: {\"d\":%d,\"t\":%d}\n\n", progDone, progTotal); err != nil {
+				return false
+			}
+			rc.Flush()
+		}
+		return true
+	}
+
 	// Stream every file concurrently into a shared channel.
 	lines := make(chan logLine, 256)
 	var wg sync.WaitGroup
@@ -317,6 +351,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			case ln, ok := <-lines:
 				if !ok {
 					writeEOF()
+					return
+				}
+				if !progress(ln.path, ln.pos) {
 					return
 				}
 				if matches(ln.text) && !writeLine(ln) {
@@ -375,6 +412,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				flush()
 				writeEOF()
+				return
+			}
+			if !progress(ln.path, ln.pos) {
 				return
 			}
 			if !matches(ln.text) {

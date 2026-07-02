@@ -26,7 +26,7 @@ jobs:
             arch=${target#*/}
             echo "building tailon-ng-$os-$arch"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -trimpath -ldflags "-s -w" -o "dist/tailon-ng-$os-$arch" .
+              go build -trimpath -ldflags "-s -w -X main.version=$GITHUB_REF_NAME" -o "dist/tailon-ng-$os-$arch" .
           done
 
       - name: Publish release

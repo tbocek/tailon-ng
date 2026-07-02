@@ -58,10 +58,16 @@ func gatherSources(args []string) []string {
 	return sources
 }
 
+// version is stamped by the release build via -ldflags "-X main.version=vN"
+// (see .github/workflows/build.yml), so the UI always shows the tag it was
+// built from. Local builds show "dev".
+var version = "dev"
+
 // Config contains all backend and frontend configuration options and relevant state.
 type Config struct {
 	RelativeRoot string
 	BindAddr     string
+	Version      string
 
 	Sources []string
 }
@@ -72,6 +78,7 @@ func defaultConfig() *Config {
 	return &Config{
 		RelativeRoot: "/",
 		BindAddr:     ":8080",
+		Version:      version,
 	}
 }
 

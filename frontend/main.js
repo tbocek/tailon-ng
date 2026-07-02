@@ -227,10 +227,14 @@ const logview = {
 
 function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
 
-// setLoading toggles the sweep under the toolbar and the scroll-suppressed
-// loading mode (see logview.loading).
+// setLoading toggles the progress bar under the toolbar and the
+// scroll-suppressed loading mode (see logview.loading). The bar starts as an
+// indeterminate sweep and turns into a real 0-100 bar on the first "progress"
+// event; loads without byte progress (compressed archives) keep the sweep.
 function setLoading(on) {
     el["loading"].hidden = !on;
+    el["loading"].classList.add("indeterminate");
+    el["loading"].style.backgroundSize = "0% 100%";
     logview.loading = on;
     if (on) logview.userScrolled = false;
 }
@@ -278,6 +282,12 @@ function connect() {
         // The file shrank or was replaced: everything cached is invalid.
         if (entry) { entry.lines = []; entry.offset = -1; }
         logview.clear();
+    });
+    src.addEventListener("progress", function (e) {
+        const p = JSON.parse(e.data); // {"d": bytes read, "t": bytes total}
+        if (!(p.t > 0)) return;
+        el["loading"].classList.remove("indeterminate");
+        el["loading"].style.backgroundSize = Math.min(100, Math.round(p.d * 100 / p.t)) + "% 100%";
     });
     src.addEventListener("eof", function () {
         if (entry && state.file && state.file.stale) entry.done = true; // archives are immutable

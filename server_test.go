@@ -91,13 +91,20 @@ func readSSEData(t *testing.T, r io.Reader, n int, timeout time.Duration) []sseF
 	go func() {
 		var frames []sseFrame
 		scanner := bufio.NewScanner(r)
+		event := "" // pending named event; its data is a control frame, not a line
 		for len(frames) < n && scanner.Scan() {
-			if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok && data != "" {
+			if name, ok := strings.CutPrefix(scanner.Text(), "event: "); ok {
+				event = name
+				continue
+			}
+			if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok && data != "" && event == "" {
 				var f sseFrame
 				if err := json.Unmarshal([]byte(data), &f); err != nil {
 					t.Errorf("bad SSE frame %q: %v", data, err)
 				}
 				frames = append(frames, f)
+			} else if ok {
+				event = "" // consumed the control frame's data
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -478,6 +485,34 @@ func TestStreamResume(t *testing.T) {
 	}
 }
 
+// TestStreamProgress checks that grep loads report byte progress and finish at
+// done == total (the client's 0-100 bar).
+func TestStreamProgress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.log")
+	if err := os.WriteFile(path, []byte("1\n2\n3\n"), 0o644); err != nil { // 6 bytes
+		t.Fatal(err)
+	}
+	config = defaultConfig()
+	config.Sources = []string{path}
+	createListing(config.Sources)
+
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body) // grep closes at EOF
+	resp.Body.Close()
+	if !strings.Contains(string(body), "event: progress") {
+		t.Fatalf("no progress events in:\n%s", body)
+	}
+	if !strings.Contains(string(body), `{"d":6,"t":6}`) {
+		t.Fatalf("progress did not reach done == total:\n%s", body)
+	}
+}
+
 // TestStreamReset checks that an offset beyond the file (truncated or replaced
 // since the client cached it) triggers a reset and a restart from the top.
 func TestStreamReset(t *testing.T) {
@@ -564,6 +599,9 @@ func TestIndexHandler(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "vfs/main.js") {
 		t.Fatal("index template did not render the expected content")
+	}
+	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">dev<") {
+		t.Fatal("index template did not render the version badge")
 	}
 }
 

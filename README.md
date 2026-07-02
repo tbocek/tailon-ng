@@ -114,6 +114,14 @@ bytes that arrived since — and a fully-read archive is never requested again.
 If a file shrank or was replaced (rotation), the server signals a reset and the
 view rebuilds from scratch.
 
+Grep loads show a real **0–100 progress bar** — a thin line under the toolbar
+driven by the server's byte progress (lines the filter drops still advance it,
+since it measures bytes read). While a load streams in, the view holds still
+instead of chasing the bottom, then jumps to the end once at EOF — unless you
+already started scrolling. Compressed archives, whose decoded size isn't known
+up front, show an indeterminate sweep instead. The toolbar's top-right corner
+shows the **running version**, linking to the releases page.
+
 The web UI's file selector includes an **All files** entry (selected by default)
 that streams every served file at once, each line prefixed by its file (click
 the prefix to jump into that file's grep — scrolled to, and highlighting, that
@@ -235,6 +243,16 @@ which decode `.xz` and `.zst` archives. File reading and following live in
 * Windows support (can use one of the Go tail implementations).
 
 * Implement [wtee].
+
+### Versioning
+
+Release binaries are stamped with their git tag at build time
+(`-ldflags "-X main.version=..."` in the GitHub Actions workflow), which is what
+the UI's version badge shows. Local builds show `dev`; to stamp one yourself:
+
+```
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+```
 
 ### Testing
 
