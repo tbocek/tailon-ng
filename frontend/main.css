@@ -36,10 +36,10 @@ body {
     position: relative; /* anchors the #loading bar just below */
 }
 
-/* Loading bar pinned under the toolbar while a grep streams in: a real 0-100
+/* Loading bar pinned under the toolbar while a view streams in: a real 0-100
    bar driven by the server's byte progress (the JS sets background-size), with
    an indeterminate sweep until the first progress event — and for loads with
-   no byte progress, like compressed archives. The view stays put during the
+   no byte progress, like tail catch-up and find. The view stays put during the
    load (no per-frame scrolling) and jumps to the bottom once, at EOF. */
 #loading {
     position: absolute;
@@ -132,11 +132,17 @@ body {
 }
 
 #scrollable { flex: 1 1 auto; overflow: auto; }
+/* Padding, not margin: a child's bottom margin is often left out of the
+   scrollable overflow region, so a gap made of margin can vanish when pinned
+   to the bottom. The larger bottom padding keeps the last line clear of the
+   horizontal scrollbar when the view follows the tail. A right gap can only
+   show at full right-scroll (or with wrap on) — lines wider than the window
+   are clipped by the scrollport itself, which no padding can inset. */
 #logview {
     font-family: var(--mono);
     font-size: 13px;
     line-height: 1.3;
-    padding: 4px 8px;
+    padding: 4px 8px 12px;
     white-space: pre;
     word-break: break-all;
 }

@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"compress/bzip2"
-	"compress/gzip"
 	"context"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/gzip" // drop-in, decodes ~2x faster than compress/gzip
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
@@ -147,15 +147,35 @@ func decoder(path string) func(io.Reader) (io.Reader, error) {
 	case strings.HasSuffix(path, ".xz"):
 		return func(r io.Reader) (io.Reader, error) { return xz.NewReader(r) }
 	case strings.HasSuffix(path, ".zst"):
-		return func(r io.Reader) (io.Reader, error) { return zstd.NewReader(r) }
+		return func(r io.Reader) (io.Reader, error) {
+			zr, err := zstd.NewReader(r)
+			if err != nil {
+				return nil, err
+			}
+			// The zstd decoder runs goroutines that live until Close: hand the
+			// callers a Closer so they can release them (see below).
+			return zr.IOReadCloser(), nil
+		}
 	}
 	return nil
 }
 
-// streamCompressed sends each line of a compressed archive, decoded, with no
-// byte offsets (-1): archives are immutable, so the client caches them whole
-// and never resumes mid-way. Reading is line-buffered rather than whole-file,
-// so large archives don't sit in memory.
+// closeDecoder releases a decoder returned by decoder() if it holds resources
+// (the zstd reader's goroutines; gzip is a no-op Close). Call it when done
+// reading a decoded stream.
+func closeDecoder(r io.Reader) {
+	if c, ok := r.(io.Closer); ok {
+		c.Close()
+	}
+}
+
+// streamCompressed sends each line of a compressed archive, decoded. A line's
+// pos is the number of *compressed* bytes consumed so far — measured against
+// the on-disk size it drives the progress bar. It is not a resume offset:
+// archives are immutable, the client caches them whole and never resumes
+// mid-way (the stream handler knows the file is compressed and never forwards
+// pos as an offset). Reading is line-buffered rather than whole-file, so large
+// archives don't sit in memory.
 func streamCompressed(ctx context.Context, path string, send func(string, int64)) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -163,23 +183,38 @@ func streamCompressed(ctx context.Context, path string, send func(string, int64)
 	}
 	defer f.Close()
 
-	r, err := decoder(path)(f)
+	cr := &countingReader{r: f}
+	r, err := decoder(path)(cr)
 	if err != nil {
 		send("tailon-ng: cannot decompress "+path+": "+err.Error(), -1)
 		return
 	}
+	defer closeDecoder(r)
 
 	br := bufio.NewReader(r)
 	for ctx.Err() == nil {
 		line, err := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" || err == nil {
-			send(line, -1)
+			send(line, cr.n)
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// countingReader counts the bytes read through it: the compressed-side
+// position of a decoded stream, which is what archive progress is measured in.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // sleep waits for d or until ctx is cancelled, returning false if cancelled.

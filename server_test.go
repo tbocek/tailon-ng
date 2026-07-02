@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,29 @@ func TestStreamGrep(t *testing.T) {
 	got := frameTexts(readSSEData(t, resp.Body, 3, 5*time.Second))
 	if want := []string{"1", "2", "3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// TestStreamViewCap checks that view mode with nlines sends only the last
+// nlines matching lines: the client discards anything past its scrollback, so
+// the server does not ship it. Reading the whole file still drives progress.
+func TestStreamViewCap(t *testing.T) {
+	setupConfig(t, "testdata/ex1/var/log/1.log") // lines: 1, 2, 3
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=grep&nlines=2&path=testdata/ex1/var/log/1.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body) // view closes at EOF
+	resp.Body.Close()
+	got := frameTexts(readSSEData(t, strings.NewReader(string(body)), 99, 5*time.Second))
+	if want := []string{"2", "3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("capped view: got %v, want %v", got, want)
+	}
+	if !strings.Contains(string(body), "event: progress") {
+		t.Fatal("capped view should still report progress")
 	}
 }
 
@@ -496,6 +520,34 @@ func TestStreamProgress(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `{"d":6,"t":6}`) {
 		t.Fatalf("progress did not reach done == total:\n%s", body)
+	}
+}
+
+// TestArchiveProgress checks that viewing a compressed archive reports real
+// progress — measured in compressed bytes against the on-disk size — and that
+// its frames carry no resume offset (archives always restream whole).
+func TestArchiveProgress(t *testing.T) {
+	dir := writeArchives(t)
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	gz := filepath.Join(dir, "old.log.gz")
+	fi, err := os.Stat(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(gz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body) // grep closes at EOF
+	resp.Body.Close()
+	want := fmt.Sprintf(`{"d":%d,"t":%d}`, fi.Size(), fi.Size())
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("progress did not reach the archive's on-disk size %s:\n%s", want, body)
+	}
+	if strings.Contains(string(body), `"o":`) {
+		t.Fatalf("archive frames must not carry resume offsets:\n%s", body)
 	}
 }
 

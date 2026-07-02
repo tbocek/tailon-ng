@@ -19,8 +19,8 @@ const MODES = [
     { value: "find-all", label: "find-all" },
     { value: "grep", label: "view" },
 ];
-const TAIL_LINES = 10; // trailing lines shown when a tail starts (grep ignores it)
-const MAX_LINES = 50000; // browser-side scrollback cap
+const TAIL_LINES = 10; // trailing lines shown when a tail starts
+const MAX_LINES = 50000; // scrollback cap: lines kept here, and the most a view requests
 
 const state = {
     files: [], file: null, mode: "tail", filter: "", wrap: false,
@@ -241,8 +241,9 @@ function setStatus(text) { el["status"].textContent = text; el["status"].hidden 
 // setLoading toggles the progress bar under the toolbar and (unless holdView
 // is false — tail keeps bottom-following) the scroll-suppressed loading mode,
 // see logview.loading. The bar starts as an indeterminate sweep and turns into
-// a real 0-100 bar on the first "progress" event; loads without byte progress
-// (compressed archives, tail catch-up, find) keep the sweep.
+// a real 0-100 bar on the first "progress" event (views report byte progress —
+// archives in compressed bytes); loads without byte progress (tail catch-up,
+// find) keep the sweep.
 function setLoading(on, holdView) {
     el["loading"].hidden = !on;
     el["loading"].classList.add("indeterminate");
@@ -265,7 +266,12 @@ function connect() {
     el["filter-input"].placeholder = finding ? "find (regexp)" : "filter (regexp)";
     if (finding) { findRequest(); return; }
 
-    const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(TAIL_LINES) });
+    // nlines: tail's initial backlog — and in view mode the cap: anything past
+    // the scrollback would be trimmed on arrival, so don't ask for it.
+    const p = new URLSearchParams({
+        mode: state.mode, filter: state.filter,
+        nlines: String(state.mode === "tail" ? TAIL_LINES : MAX_LINES),
+    });
 
     let entry = null; // aggregate views are not cached: per-file offsets don't compose
     if (state.file.all) {

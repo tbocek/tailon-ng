@@ -245,6 +245,7 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp) []findMatch
 		if rd, err = d(f); err != nil {
 			return nil
 		}
+		defer closeDecoder(rd)
 	}
 
 	br := bufio.NewReader(rd)
@@ -292,6 +293,10 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp) []findMatch
 // by timestamp, so several files are interleaved chronologically.
 const mergeInterval = 200 * time.Millisecond
 
+// ringTrimChunk is how much slack a capped view's tail ring accumulates before
+// it is trimmed back to the cap in one copy.
+const ringTrimChunk = 1000
+
 // logLine is one line of output tagged with the file it came from (used to
 // prefix lines when several files are streamed at once) and the byte offset
 // just past it (-1 when unknown; used by the client's resume cache).
@@ -309,7 +314,12 @@ type logLine struct {
 //	        "view", single files only. Aggregate streams are always tailed
 //	        and skip rotated/compressed files (grep the archives with /find).
 //	filter  optional regular expression; only matching lines are sent.
-//	nlines  in tail mode, how many trailing lines to show before following.
+//	nlines  in tail mode, how many trailing lines to show before following. In
+//	        view mode, a cap: at most the last nlines (filtered) lines are
+//	        sent — the client discards anything past its scrollback anyway, so
+//	        a huge archive doesn't push millions of lines over the wire. The
+//	        whole file is still read (that is what drives the progress bar);
+//	        0 sends every line.
 //	path    the file to stream, or all=1 for every served file.
 //	scope   with all=1, limit the stream to files under this directory prefix.
 //	offset  resume a single-file stream from this byte offset. Served files
@@ -413,14 +423,14 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	multi := len(paths) > 1
 
 	// Progress for view loads (single-file by construction — aggregate streams
-	// always follow): total is the file's on-disk size, and each line's byte
-	// offset advances the "done" count — including lines the filter drops,
-	// since progress measures bytes read, not lines shown. A compressed
-	// archive's decoded size is unknown up front, so it is left at zero and
-	// keeps the client's indeterminate sweep.
+	// always follow): total is the file's on-disk size, and each line's pos
+	// advances the "done" count — including lines the filter drops, since
+	// progress measures bytes read, not lines shown. For compressed archives
+	// pos is the compressed-side position (see streamCompressed), so measured
+	// against the same on-disk size they too get a real 0-100 bar.
 	var progTotal, progDone int64
 	progPct := -1
-	if !follow && decoder(paths[0]) == nil {
+	if !follow {
 		if fi, err := os.Stat(paths[0]); err == nil {
 			progTotal = fi.Size()
 		}
@@ -474,6 +484,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
+	compressed := decoder(paths[0]) != nil // single-file: is it a decoded archive?
 	writeLine := func(ln logLine) bool {
 		frame := struct {
 			Path string `json:"p,omitempty"` // set when several files are streamed
@@ -482,8 +493,8 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}{Text: ln.text}
 		if multi {
 			frame.Path = ln.path
-		} else if ln.pos > 0 {
-			frame.Pos = ln.pos
+		} else if ln.pos > 0 && !compressed {
+			frame.Pos = ln.pos // an archive's pos is compressed-side progress, not a resume offset
 		}
 		data, _ := json.Marshal(frame)
 		// No flush here: during bulk reads a flush per line means a syscall and
@@ -492,14 +503,26 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		return err == nil
 	}
 	// A single file is already in order, so stream its lines as they arrive.
+	// In view mode with an nlines cap, matching lines are instead collected in
+	// a tail ring and sent once the read finishes.
 	if !multi {
+		var ring []logLine
+		capped := !follow && nlines > 0
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case ln, ok := <-lines:
 				if !ok {
-					// The file is fully read (grep mode): tell the client so
+					if capped && len(ring) > nlines {
+						ring = ring[len(ring)-nlines:]
+					}
+					for _, ln := range ring {
+						if !writeLine(ln) {
+							return
+						}
+					}
+					// The file is fully read (view mode): tell the client so
 					// its EventSource closes instead of reconnecting.
 					fmt.Fprint(w, "event: eof\ndata: \n\n")
 					rc.Flush()
@@ -511,11 +534,26 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				if !progress(ln.pos) {
 					return
 				}
-				if matches(ln.text) && !writeLine(ln) {
+				if !matches(ln.text) {
+					continue
+				}
+				if capped {
+					// Keep only the stream's tail, trimming in chunks so the
+					// cost stays amortized rather than per line.
+					if ring = append(ring, ln); len(ring) >= nlines+ringTrimChunk {
+						ring = append(ring[:0], ring[len(ring)-nlines:]...)
+					}
+					continue
+				}
+				if !writeLine(ln) {
 					return
 				}
-				if len(lines) == 0 {
-					rc.Flush() // drained: push what accumulated, then wait
+				// Per-line flushing matters only when following live — during
+				// a bulk load it would mean a tiny packet per line. Bulk loads
+				// flush via the progress events and at EOF; in between, the
+				// response buffer streams larger loads on its own.
+				if catchingUp == 0 && len(lines) == 0 {
+					rc.Flush() // live and drained: push the line out now
 				}
 			}
 		}
