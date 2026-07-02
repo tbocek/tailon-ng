@@ -168,15 +168,14 @@ func TestStreamGrep(t *testing.T) {
 	}
 }
 
-// TestStreamFilter checks the regexp filter and its inverse (done in Go).
+// TestStreamFilter checks the regexp filter (done in Go).
 func TestStreamFilter(t *testing.T) {
 	setupConfig(t, "testdata/ex1/var/log/1.log")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
-	p := "path=testdata/ex1/var/log/1.log"
 
 	// Only lines matching "2".
-	resp, err := http.Get(srv.URL + "?mode=grep&" + p + "&filter=2")
+	resp, err := http.Get(srv.URL + "?mode=grep&path=testdata/ex1/var/log/1.log&filter=2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,17 +183,6 @@ func TestStreamFilter(t *testing.T) {
 	resp.Body.Close()
 	if want := []string{"2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("filter: got %v, want %v", got, want)
-	}
-
-	// Inverted: lines NOT matching "2".
-	resp, err = http.Get(srv.URL + "?mode=grep&" + p + "&filter=2&invert=1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got = frameTexts(readSSEData(t, resp.Body, 2, 5*time.Second))
-	resp.Body.Close()
-	if want := []string{"1", "3"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("invert: got %v, want %v", got, want)
 	}
 }
 

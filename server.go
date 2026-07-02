@@ -309,7 +309,6 @@ type logLine struct {
 //	        "view", single files only. Aggregate streams are always tailed
 //	        and skip rotated/compressed files (grep the archives with /find).
 //	filter  optional regular expression; only matching lines are sent.
-//	invert  "1" inverts the filter, sending only non-matching lines.
 //	nlines  in tail mode, how many trailing lines to show before following.
 //	path    the file to stream, or all=1 for every served file.
 //	scope   with all=1, limit the stream to files under this directory prefix.
@@ -334,7 +333,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	follow := mode != "grep" // "tail" (default) follows; "grep" reads once
 	nlines, _ := strconv.Atoi(query.Get("nlines"))
-	invert := query.Get("invert") == "1"
 
 	var filter *regexp.Regexp
 	if expr := query.Get("filter"); expr != "" {
@@ -460,7 +458,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	go func() { wg.Wait(); close(lines) }()
 
 	matches := func(text string) bool {
-		return filter == nil || filter.MatchString(text) != invert
+		return filter == nil || filter.MatchString(text)
 	}
 	// In tail mode, each file reports once when its initial catch-up read is
 	// done; after the last one the client may hide its loading bar. This only
@@ -488,11 +486,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			frame.Pos = ln.pos
 		}
 		data, _ := json.Marshal(frame)
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-			return false
-		}
-		rc.Flush()
-		return true
+		// No flush here: during bulk reads a flush per line means a syscall and
+		// a tiny packet per line. The callers flush once their batch is done.
+		_, err := fmt.Fprintf(w, "data: %s\n\n", data)
+		return err == nil
 	}
 	// A single file is already in order, so stream its lines as they arrive.
 	if !multi {
@@ -517,6 +514,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				if matches(ln.text) && !writeLine(ln) {
 					return
 				}
+				if len(lines) == 0 {
+					rc.Flush() // drained: push what accumulated, then wait
+				}
 			}
 		}
 	}
@@ -534,6 +534,9 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	flush := func() bool {
+		if len(buf) == 0 {
+			return true
+		}
 		sort.SliceStable(buf, func(i, j int) bool { return buf[i].ts.Before(buf[j].ts) })
 		for _, ln := range buf {
 			if !writeLine(ln.logLine) {
@@ -541,6 +544,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		buf = buf[:0]
+		rc.Flush() // one flush per merge batch, not per line
 		return true
 	}
 

@@ -144,7 +144,12 @@ body {
 
 /* Lines highlight subtly on hover and warmly when selected (click; ctrl adds,
    shift ranges). width:max-content keeps the highlight covering long lines even
-   when scrolled horizontally; min-width fills the viewport for short ones. */
+   when scrolled horizontally; min-width fills the viewport for short ones.
+   content-visibility lets the browser skip layout and paint of off-screen
+   lines, so rendering scales with the viewport instead of the scrollback:
+   loading a big file and toggling wrap relayout only the visible lines. The
+   intrinsic-size placeholder is one 13px/1.3 line; "auto" remembers each
+   line's real size once rendered (wrapped lines are taller). */
 #logview .log-entry {
     display: block;
     width: max-content;
@@ -152,6 +157,8 @@ body {
     padding: 0 8px;
     margin: 0 -8px; /* cancel #logview's side padding so the highlight is edge-to-edge */
     transition: background-color 0.08s ease;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 17px;
 }
 /* In wrap mode lines break at the container edge — max-content would size the
    box to the unwrapped line and prevent any wrapping at all. */

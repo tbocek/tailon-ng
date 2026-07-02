@@ -17,7 +17,7 @@
 Tailon-ng is a webapp for looking at and searching through log files from your
 browser. It serves files — single files, globs or whole directories — and lets
 you **tail** them live or **grep** through them, with a regular-expression
-filter (which can be inverted). Reading, following and filtering are all done
+filter. Reading, following and filtering are all done
 natively in Go: tailon-ng never shells out to `tail`, `grep` or any other tool.
 It is almost entirely Go standard library — the only third-party code is two
 small, pure-Go decompression libraries ([ulikunitz/xz] and [klauspost/compress]
@@ -74,9 +74,8 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
 **find** (the first matches per file, with context — **find-all** also searches
 rotated archives), or read whole with **view** (single files only). Tail and
-view can be narrowed with an optional regular-expression **filter** that can be
-inverted (all set in the UI). Tailon-ng itself is configured entirely with
-command-line flags.
+view can be narrowed with an optional regular-expression **filter** (all set in
+the UI). Tailon-ng itself is configured entirely with command-line flags.
 
 To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a

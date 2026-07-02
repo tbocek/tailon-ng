@@ -2,7 +2,7 @@
 
 // Tailon-ng frontend: framework-free vanilla JavaScript. It fetches the file list
 // and streams lines over Server-Sent Events. Modes: "tail" (follow) and "grep"
-// (whole file); a regexp filter (server-side, invertible) narrows the output.
+// (whole file); a regexp filter (server-side) narrows the output.
 // Injected global: relativeRoot.
 
 const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "/";
@@ -23,13 +23,13 @@ const TAIL_LINES = 10; // trailing lines shown when a tail starts (grep ignores 
 const MAX_LINES = 50000; // browser-side scrollback cap
 
 const state = {
-    files: [], file: null, mode: "tail", filter: "", invert: false, wrap: false,
+    files: [], file: null, mode: "tail", filter: "", wrap: false,
     source: null,
     prefix: "", // directory prefix shared by every served file, hidden in the UI
 };
 
 // Served files are append-only, so lines fetched once stay valid: single-file
-// views are cached per (file, mode, filter, invert) along with the byte offset
+// views are cached per (file, mode, filter) along with the byte offset
 // read so far, and reconnecting re-renders the cache and asks the server only
 // for what follows. Archives are immutable — once read, they never re-fetch.
 // The server sends "event: reset" if a file shrank or was replaced.
@@ -39,7 +39,7 @@ const cache = new Map(); // key -> { lines: [], offset: -1, done: false }
 function cacheEntry() {
     // Only tail and view (wire value "grep") reach here; find renders results,
     // not a line stream, and never caches.
-    const key = JSON.stringify([state.file.path, state.mode, state.filter, state.invert]);
+    const key = JSON.stringify([state.file.path, state.mode, state.filter]);
     let entry = cache.get(key);
     if (entry) cache.delete(key); // re-insert, so eviction drops the least recent
     else entry = { lines: [], offset: -1, done: false };
@@ -51,7 +51,7 @@ function cacheEntry() {
 const el = {};
 [
     "file-select", "mode-select", "filter-input", "filter-apply",
-    "cfg-invert", "cfg-wrap", "action-download", "status", "scrollable", "logview", "toast", "loading",
+    "cfg-wrap", "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(function (id) { el[id] = document.getElementById(id); });
 
 // Line selection: clicking a line highlights it (clicking again clears it),
@@ -260,14 +260,12 @@ function connect() {
     setStatus("");
 
     // The one text input is the live filter in tail/view and the search query
-    // in the find modes (where inverting makes no sense).
+    // in the find modes.
     const finding = state.mode.indexOf("find") === 0;
     el["filter-input"].placeholder = finding ? "find (regexp)" : "filter (regexp)";
-    el["cfg-invert"].parentElement.style.display = finding ? "none" : "";
     if (finding) { findRequest(); return; }
 
     const p = new URLSearchParams({ mode: state.mode, filter: state.filter, nlines: String(TAIL_LINES) });
-    if (state.invert) p.set("invert", "1");
 
     let entry = null; // aggregate views are not cached: per-file offsets don't compose
     if (state.file.all) {
@@ -669,8 +667,6 @@ function init() {
         connect();
     };
 
-    el["cfg-invert"].checked = state.invert;
-    el["cfg-invert"].onchange = function () { state.invert = el["cfg-invert"].checked; connect(); };
     el["cfg-wrap"].checked = state.wrap;
     el["cfg-wrap"].onchange = function () { state.wrap = el["cfg-wrap"].checked; el["logview"].classList.toggle("wrap", state.wrap); };
 
