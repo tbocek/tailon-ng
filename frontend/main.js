@@ -11,6 +11,8 @@ const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "
 // bounded and fast on any file size; "find-all" also searches rotated archives
 // (.gz, .1, …), decoded server-side. "view" (wire value "grep") shows a whole
 // file: it is also what clicking a find result or a line's file prefix opens.
+// View works on single files only — for a group, a dump of several files
+// interleaved is not useful, so the option is disabled (see syncModeOptions).
 const MODES = [
     { value: "tail", label: "tail" },
     { value: "find", label: "find" },
@@ -35,8 +37,9 @@ const MAX_CACHE_VIEWS = 20;
 const cache = new Map(); // key -> { lines: [], offset: -1, done: false }
 
 function cacheEntry() {
-    const m = state.mode === "tail" ? "tail" : "grep"; // grep-all == grep for one file
-    const key = JSON.stringify([state.file.path, m, state.filter, state.invert]);
+    // Only tail and view (wire value "grep") reach here; find renders results,
+    // not a line stream, and never caches.
+    const key = JSON.stringify([state.file.path, state.mode, state.filter, state.invert]);
     let entry = cache.get(key);
     if (entry) cache.delete(key); // re-insert, so eviction drops the least recent
     else entry = { lines: [], offset: -1, done: false };
@@ -199,7 +202,7 @@ const logview = {
                 const link = document.createElement("a");
                 link.className = "path-link";
                 link.textContent = stripPrefix(ln.path);
-                link.title = "grep " + ln.path;
+                link.title = "view " + ln.path;
                 link.dataset.path = ln.path;
                 span.appendChild(link);
                 span.appendChild(document.createTextNode(": "));
@@ -415,16 +418,15 @@ function commonPrefix(paths) {
     return p.slice(0, p.lastIndexOf("/") + 1);
 }
 
-// jumpToFile selects the file in the dropdown and greps it (used by the
+// jumpToFile selects the file in the dropdown and views it whole (used by the
 // clickable per-line path prefix in multi-file streams). When the clicked
-// line's text is given, the grep view scrolls to that line and highlights it.
+// line's text is given, the view scrolls to that line and highlights it.
 function jumpToFile(path, text) {
     const i = state.files.findIndex(function (f) { return !f.all && f.path === path; });
     if (i < 0) return;
     el["file-select"].value = String(i);
     state.file = state.files[i];
-    state.mode = "grep"; // "view": the complete file
-    el["mode-select"].value = "grep";
+    state.mode = "grep"; // "view": the complete file (syncModeOptions syncs the select)
     // The complete file, unfiltered — a leftover filter (or find query) would
     // hide the context around the jump target.
     state.filter = "";
@@ -437,16 +439,19 @@ function jumpToFile(path, text) {
     logview.locate = text !== undefined ? text.replace(ANSI_RE, "") : null;
 }
 
-// syncModeOptions disables "tail" while a rotated/compressed file is selected
-// (it will never grow) and switches to "view". It only adjusts state — the
-// caller connects.
+// syncModeOptions matches the mode options to the selected entry: "tail" is
+// disabled for a rotated/compressed file (it will never grow), which is viewed
+// instead, and "view" is disabled for group entries (a whole-file dump of many
+// files interleaved is not useful — tail or find them instead), which fall
+// back to tail. It only adjusts state — the caller connects.
 function syncModeOptions() {
-    const stale = state.file && state.file.stale;
+    const stale = state.file && state.file.stale; // groups are never stale
+    const group = state.file && state.file.all;
     el["mode-select"].options[0].disabled = !!stale; // options[0] is "tail"
-    if (stale && state.mode === "tail") {
-        state.mode = "grep";
-        el["mode-select"].value = "grep";
-    }
+    el["mode-select"].options[3].disabled = !!group; // options[3] is "view"
+    if (stale && state.mode === "tail") state.mode = "grep";
+    if (group && state.mode === "grep") state.mode = "tail";
+    el["mode-select"].value = state.mode;
 }
 
 async function refreshFiles() {
@@ -465,6 +470,7 @@ async function refreshFiles() {
     // Offer each subfolder as a "tail/find everything under here" entry. A folder
     // is any ancestor directory holding some — but not all — of the files; one
     // holding all of them would just duplicate "All files", so it is skipped.
+    const groups = [];
     const counts = {};
     data.forEach(function (entry) {
         let d = entry.path;
@@ -473,11 +479,8 @@ async function refreshFiles() {
             counts[d] = (counts[d] || 0) + 1;
         }
     });
-    Object.keys(counts).filter(function (d) { return counts[d] < data.length; }).sort()
-        .forEach(function (d) {
-            el["file-select"].add(new Option("▸ " + stripPrefix(d) + "/", String(state.files.length)));
-            state.files.push({ path: d, scope: d + "/", all: true });
-        });
+    Object.keys(counts).filter(function (d) { return counts[d] < data.length; })
+        .forEach(function (d) { groups.push({ path: d, scope: d + "/", all: true, dir: true }); });
 
     // Also group files sharing a name prefix (cut at . - _), e.g. two hosts
     // logging as 192.168.1.5.log and 192.168.1.22.log yield "▸ 192.168.1*",
@@ -506,15 +509,39 @@ async function refreshFiles() {
         return !Object.keys(nameGroups).some(function (q) {
             return q !== p && q.indexOf(p) === 0 && nameGroups[q] === nameGroups[p];
         });
-    }).sort().forEach(function (p) {
-        el["file-select"].add(new Option("▸ " + stripPrefix(p) + "*", String(state.files.length)));
-        state.files.push({ path: p, scope: p, all: true });
-    });
+    }).forEach(function (p) { groups.push({ path: p, scope: p, all: true }); });
 
-    data.forEach(function (entry) {
-        const label = stripPrefix(entry.path) + (entry.stale ? "  (archived)" : "");
-        el["file-select"].add(new Option(label, String(state.files.length)));
-        state.files.push(entry);
+    // Render groups and files as one tree: sorted by path, each entry nests
+    // under the closest group whose scope string-prefixes it — the same rule
+    // the server scopes by, so the display and the selection always agree —
+    // and is indented by its depth. Labels are relative to the parent: a
+    // folder shows its own segment, a name group its base-name prefix, a file
+    // its base name. Every ancestor folder below the common prefix is offered,
+    // so a file's base name is never ambiguous.
+    const stack = []; // scopes of the groups enclosing the current entry
+    groups.concat(data).sort(function (a, b) {
+        const ka = a.scope || a.path, kb = b.scope || b.path;
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return (a.all ? 0 : 1) - (b.all ? 0 : 1); // a group precedes a file of the same name
+    }).forEach(function (en) {
+        const key = en.scope || en.path;
+        while (stack.length && key.indexOf(stack[stack.length - 1]) !== 0) stack.pop();
+        let label;
+        if (en.dir) {
+            let parent = state.prefix; // the closest enclosing *folder* shown
+            for (let i = stack.length - 1; i >= 0; i--) {
+                if (stack[i].slice(-1) === "/") { parent = stack[i]; break; }
+            }
+            label = "▸ " + key.slice(parent.length);
+        } else if (en.all) {
+            label = "▸ " + en.path.slice(en.path.lastIndexOf("/") + 1) + "*";
+        } else {
+            label = en.path.slice(en.path.lastIndexOf("/") + 1) + (en.stale ? "  (archived)" : "");
+        }
+        const indent = "\u00A0\u00A0\u00A0".repeat(stack.length); // nbsp: <option> would collapse plain spaces
+        el["file-select"].add(new Option(indent + label, String(state.files.length)));
+        state.files.push(en);
+        if (en.all) stack.push(en.scope);
     });
 
     // Restore the previous selection by path/scope, else select the first entry.

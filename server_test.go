@@ -302,7 +302,7 @@ func TestStreamAllFilesSorted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=grep&all=1")
+	resp, err := http.Get(srv.URL + "?mode=tail&nlines=2&all=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestStreamScopedSubfolder(t *testing.T) {
 	defer srv.Close()
 
 	scope := filepath.Join(dir, "host1") + "/" // the client sends directory scopes with a trailing slash
-	resp, err := http.Get(srv.URL + "?mode=grep&all=1&scope=" + url.QueryEscape(scope))
+	resp, err := http.Get(srv.URL + "?mode=tail&nlines=1&all=1&scope=" + url.QueryEscape(scope))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,35 +395,33 @@ func writeArchives(t *testing.T) (dir string) {
 	return dir
 }
 
-// TestGrepAllModes checks that aggregate grep skips archives while grep-all
-// reads them, decoded.
-func TestGrepAllModes(t *testing.T) {
+// TestAggregateTailSkipsArchives checks that an aggregate stream tails live
+// files only: rotated/compressed leftovers never pollute it.
+func TestAggregateTailSkipsArchives(t *testing.T) {
 	writeArchives(t)
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	// grep: live files only — exactly the two live lines, then EOF.
-	resp, err := http.Get(srv.URL + "?mode=grep&all=1")
+	resp, err := http.Get(srv.URL + "?mode=tail&nlines=5&all=1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	got := frameTexts(readSSEData(t, resp.Body, 2, 5*time.Second))
-	resp.Body.Close()
 	if want := []string{"live1", "live2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("grep(all): got %v, want %v", got, want)
+		t.Fatalf("tail(all): got %v, want %v", got, want)
 	}
+}
 
-	// grep-all: archives included and transparently decoded.
-	resp, err = http.Get(srv.URL + "?mode=grep-all&all=1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	frames := readSSEData(t, resp.Body, 5, 5*time.Second)
-	resp.Body.Close()
-	texts := strings.Join(frameTexts(frames), " ")
-	for _, want := range []string{"live1", "from-gz", "from-xz", "from-zst"} {
-		if !strings.Contains(texts, want) {
-			t.Errorf("grep-all missing %q in %q", want, texts)
+// TestStreamRejectsAggregateView checks that view (grep) is limited to single
+// files: an aggregate view — and the removed grep-all mode — are rejected.
+func TestStreamRejectsAggregateView(t *testing.T) {
+	setupConfig(t, "testdata/ex1/var/log/")
+	for _, q := range []string{"mode=grep&all=1", "mode=grep&all=1&scope=testdata/ex1/var/", "mode=grep-all&all=1"} {
+		w := httptest.NewRecorder()
+		streamHandler(w, httptest.NewRequest("GET", "/stream?"+q, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", q, w.Code)
 		}
 	}
 }
@@ -645,6 +643,9 @@ func TestStreamLive(t *testing.T) {
 				found <- true
 				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			t.Errorf("reading SSE stream: %v", err)
 		}
 		found <- false
 	}()

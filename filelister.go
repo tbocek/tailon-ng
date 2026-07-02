@@ -145,7 +145,9 @@ func globRegexp(pattern string) *regexp.Regexp {
 				if rest, ok := strings.CutPrefix(class, "!"); ok {
 					class = "^" + rest
 				}
-				b.WriteString("[" + class + "]")
+				b.WriteByte('[')
+				b.WriteString(class)
+				b.WriteByte(']')
 				i += j
 			} else {
 				b.WriteString(regexp.QuoteMeta(string(c)))

@@ -305,9 +305,9 @@ type logLine struct {
 // over Server-Sent Events. Query parameters:
 //
 //	mode    "tail" (default) follows the file like tail -f; "grep" reads the
-//	        whole file once, from the start, without following. Aggregate
-//	        streams skip rotated/compressed files in both, unless the mode is
-//	        "grep-all", which also reads the archives (decoded).
+//	        whole file once, from the start, without following — the UI's
+//	        "view", single files only. Aggregate streams are always tailed
+//	        and skip rotated/compressed files (grep the archives with /find).
 //	filter  optional regular expression; only matching lines are sent.
 //	invert  "1" inverts the filter, sending only non-matching lines.
 //	nlines  in tail mode, how many trailing lines to show before following.
@@ -328,7 +328,11 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	mode := query.Get("mode")
-	follow := mode != "grep" && mode != "grep-all" // "tail" follows; grep modes read once
+	if mode != "" && mode != "tail" && mode != "grep" {
+		http.Error(w, "unknown mode: "+mode, http.StatusBadRequest)
+		return
+	}
+	follow := mode != "grep" // "tail" (default) follows; "grep" reads once
 	nlines, _ := strconv.Atoi(query.Get("nlines"))
 	invert := query.Get("invert") == "1"
 
@@ -342,26 +346,29 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		filter = re
 	}
 
-	// Resolve the files to stream. "all=1" streams every served file at once.
-	// Rotated/compressed leftovers are skipped in aggregate streams — tailing
-	// them is meaningless and their raw bytes are garbage — unless the mode is
-	// "grep-all", which searches the archives too.
+	// Resolve the files to stream. "all=1" tails every served file at once —
+	// viewing (grep) a merged dump of several files is not useful, so it is
+	// limited to single files. Rotated/compressed leftovers are skipped in
+	// aggregate streams: tailing them is meaningless and their raw bytes are
+	// garbage.
 	var paths []string
 	if query.Get("all") == "1" {
+		if !follow {
+			http.Error(w, "view is limited to single files", http.StatusBadRequest)
+			return
+		}
 		if scope := query.Get("scope"); scope != "" {
 			paths = allowedUnder(scope) // just the files under one subfolder
 		} else {
 			paths = allowedFiles()
 		}
-		if mode != "grep-all" {
-			live := paths[:0]
-			for _, p := range paths {
-				if !isStale(p) {
-					live = append(live, p)
-				}
+		live := paths[:0]
+		for _, p := range paths {
+			if !isStale(p) {
+				live = append(live, p)
 			}
-			paths = live
 		}
+		paths = live
 		if len(paths) == 0 {
 			http.Error(w, "no files to stream", http.StatusNotFound)
 			return
@@ -407,30 +414,24 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	multi := len(paths) > 1
 
-	// Progress for grep loads (the client renders a 0-100 bar under the
-	// toolbar): total is the on-disk size of every plain file to be read, and
-	// each line's byte offset advances the "done" count — including lines the
-	// filter drops, since progress measures bytes read, not lines shown.
-	// Compressed archives are left out (their decoded size is unknown up
-	// front); an archive-only load keeps the client's indeterminate sweep.
+	// Progress for view loads (single-file by construction — aggregate streams
+	// always follow): total is the file's on-disk size, and each line's byte
+	// offset advances the "done" count — including lines the filter drops,
+	// since progress measures bytes read, not lines shown. A compressed
+	// archive's decoded size is unknown up front, so it is left at zero and
+	// keeps the client's indeterminate sweep.
 	var progTotal, progDone int64
 	progPct := -1
-	progPos := map[string]int64{}
-	if !follow {
-		for _, p := range paths {
-			if decoder(p) == nil {
-				if fi, err := os.Stat(p); err == nil {
-					progTotal += fi.Size()
-				}
-			}
+	if !follow && decoder(paths[0]) == nil {
+		if fi, err := os.Stat(paths[0]); err == nil {
+			progTotal = fi.Size()
 		}
 	}
-	progress := func(path string, pos int64) bool {
-		if progTotal <= 0 || pos <= progPos[path] {
+	progress := func(pos int64) bool {
+		if progTotal <= 0 || pos <= progDone {
 			return true
 		}
-		progDone += pos - progPos[path]
-		progPos[path] = pos
+		progDone = pos
 		if pct := int(progDone * 100 / progTotal); pct != progPct {
 			progPct = pct
 			if _, err := fmt.Fprintf(w, "event: progress\ndata: {\"d\":%d,\"t\":%d}\n\n", progDone, progTotal); err != nil {
@@ -493,13 +494,6 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		rc.Flush()
 		return true
 	}
-	writeEOF := func() {
-		// Tell the client we're done so its EventSource closes instead of
-		// reconnecting (only happens in grep mode, when every file is read).
-		fmt.Fprint(w, "event: eof\ndata: \n\n")
-		rc.Flush()
-	}
-
 	// A single file is already in order, so stream its lines as they arrive.
 	if !multi {
 		for {
@@ -508,13 +502,16 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			case ln, ok := <-lines:
 				if !ok {
-					writeEOF()
+					// The file is fully read (grep mode): tell the client so
+					// its EventSource closes instead of reconnecting.
+					fmt.Fprint(w, "event: eof\ndata: \n\n")
+					rc.Flush()
 					return
 				}
 				if caughtUp(ln) {
 					continue
 				}
-				if !progress(ln.path, ln.pos) {
+				if !progress(ln.pos) {
 					return
 				}
 				if matches(ln.text) && !writeLine(ln) {
@@ -571,15 +568,12 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		case ln, ok := <-lines:
 			if !ok {
-				flush()
-				writeEOF()
+				// Aggregate streams always follow, so the readers — and with
+				// them this channel — only wind down once ctx is cancelled.
 				return
 			}
 			if caughtUp(ln) {
 				continue
-			}
-			if !progress(ln.path, ln.pos) {
-				return
 			}
 			if !matches(ln.text) {
 				continue

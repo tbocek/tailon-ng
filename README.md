@@ -71,10 +71,12 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 
 ## Usage
 
-Each file can be viewed in two modes — **tail** (follow the file live, like
-`tail -f`) or **grep** (read the whole file from the start) — and narrowed with
-an optional regular-expression **filter** that can be inverted (both set in the
-UI). Tailon-ng itself is configured entirely with command-line flags.
+Files are watched in **tail** mode (follow live, like `tail -f`), searched with
+**find** (the first matches per file, with context — **find-all** also searches
+rotated archives), or read whole with **view** (single files only). Tail and
+view can be narrowed with an optional regular-expression **filter** that can be
+inverted (all set in the UI). Tailon-ng itself is configured entirely with
+command-line flags.
 
 To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a
@@ -89,14 +91,17 @@ tailon-ng "/var/log/**.log"
 
 Directories are served recursively — every file beneath them (including in
 subdirectories) is available, and new files are picked up as they appear. The
-file selector also lists each subfolder, so you can tail or grep just the logs
-beneath one of them.
+file selector renders everything as a tree: each subfolder (and each group of
+files sharing a name prefix, such as per-host logs) is a selectable entry with
+its contents nested beneath it, so you can tail or find just the logs under
+one of them. Viewing a whole file is for single files only — a merged dump of
+several files is not useful, so the view mode is disabled for group entries.
 
 Rotated and compressed logs are handled the way you'd want: files that are no
 longer written to (`.gz`, `.bz2`, `.xz`, `.zst`, numeric `.1`, date-stamped
 `-YYYYMMDD`, `.old`, `.bak`) are listed as *archived* but excluded from live
-tailing, so compressed bytes never pollute the stream. Selecting one greps it
-with the compression decoded transparently, and the **grep-all** mode searches
+tailing, so compressed bytes never pollute the stream. Selecting one views it
+with the compression decoded transparently, and the **find-all** mode searches
 live files *and* every archive together.
 
 Tailing is push-based on Linux: appended lines reach the browser in
@@ -109,12 +114,12 @@ so nothing is ever missed.
 The frontend exploits the fact that log files are **append-only**: every
 single-file view is cached in the browser together with the byte offset read so
 far, keyed by file, mode and filter. Switching between files, or between tail
-and grep, re-renders instantly from the cache and asks the server only for the
+and view, re-renders instantly from the cache and asks the server only for the
 bytes that arrived since — and a fully-read archive is never requested again.
 If a file shrank or was replaced (rotation), the server signals a reset and the
 view rebuilds from scratch.
 
-Grep loads show a real **0–100 progress bar** — a thin line under the toolbar
+View loads show a real **0–100 progress bar** — a thin line under the toolbar
 driven by the server's byte progress (lines the filter drops still advance it,
 since it measures bytes read). While a load streams in, the view holds still
 instead of chasing the bottom, then jumps to the end once at EOF — unless you
@@ -124,7 +129,7 @@ shows the **running version**, linking to the releases page.
 
 The web UI's file selector includes an **All files** entry (selected by default)
 that streams every served file at once, each line prefixed by its file (click
-the prefix to jump into that file's grep — scrolled to, and highlighting, that
+the prefix to jump into that file's view — scrolled to, and highlighting, that
 very line) and the streams **merged in timestamp order**. Several common formats are recognized at
 (or near) the start of each line — ISO 8601 / RFC 3339, `YYYY-MM-DD HH:MM:SS`,
 slash-separated dates, Apache/CLF, Unix `ctime` and syslog (RFC 3164). The format
@@ -176,8 +181,8 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments or comma-separated.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing and plain grep. The web UI's grep-all mode also
-searches them, decompressed transparently.
+but excluded from live tailing. The web UI's find-all mode also searches them,
+decompressed transparently, and viewing one shows it decoded.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.
