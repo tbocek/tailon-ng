@@ -4,7 +4,6 @@
 
 # Tailon-ng
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/tbocek/tailon-ng)](https://goreportcard.com/report/github.com/tbocek/tailon-ng)
 [![Apache License](https://img.shields.io/badge/license-Apache-blue.svg)](https://github.com/tbocek/tailon-ng/blob/main/LICENSE)
 
 > **This is a fork of [gvalkov/tailon].** It keeps the purpose — tail and grep your
