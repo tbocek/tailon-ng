@@ -242,19 +242,7 @@ which decode `.xz` and `.zst` archives. File reading and following live in
 
 ### TODO
 
-* Basic and digest authentication.
-
-* Add a 'command' filespec - e.g. `"command,journalctl -u nginx"`.
-
-* Better configuration dialog.
-
-* Add interface themes - e.g. light, dark and solarized.
-
-* Add ability to change font family and size.
-
-* Windows support (can use one of the Go tail implementations).
-
-* Implement [wtee].
+* Better UI for the files drop down menu. For many files the current view can be improved
 
 ### Versioning
 
