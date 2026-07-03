@@ -73,8 +73,9 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 ## Usage
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
-**find** (the first matches per file, with context — **find-all** also searches
-rotated archives), or read whole with **view** (single files only). In tail
+**find** (the first 3 matches per file with ±3 lines of context — a scent
+trail; open the file's view to step through all matches. **find-all** also
+searches rotated archives), or read whole with **view** (single files only). In tail
 and view the input is a browser-side **search**: matching lines and the
 matched text highlight as you type — nothing is hidden, and lines streaming in
 live are matched as they arrive — and Enter or the ▲▼ buttons step between

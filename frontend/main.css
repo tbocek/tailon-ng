@@ -132,11 +132,11 @@ body {
     border-radius: 2px;
 }
 
-/* The black border frames the log on all four sides. Unlike padding, a border
-   is chrome, not scrollable content: the right edge keeps its frame even
-   while over-wide lines are clipped by the scrollport, and the bottom frame
-   sits below the horizontal scrollbar. */
-#scrollable { flex: 1 1 auto; overflow: auto; border: 8px solid #000; }
+/* The top/bottom border gives the log breathing room. Unlike padding, a
+   border is chrome, not scrollable content, so the bottom strip stays below
+   the horizontal scrollbar; it matches the log background, so it reads as a
+   margin. No side borders: lines run to the window edges. */
+#scrollable { flex: 1 1 auto; overflow: auto; border: solid var(--bg); border-width: 8px 0; }
 #logview {
     font-family: var(--mono);
     font-size: 13px;
@@ -260,4 +260,7 @@ body {
 .ansi-fg-14 { color: #70c0b1; }  .ansi-bg-14 { background-color: #70c0b1; }
 .ansi-fg-15 { color: #ffffff; }  .ansi-bg-15 { background-color: #ffffff; }
 
-::selection { background: var(--input); }
+/* Selection must contrast everywhere — in particular inside the toolbar
+   inputs, whose background is var(--input): a selection of the same color is
+   invisible, which reads as "double-click doesn't select". */
+::selection { background: #81a2be; color: #1d1f21; }

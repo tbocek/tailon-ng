@@ -23,6 +23,7 @@ const MODES = [
 ];
 const TAIL_LINES = 10; // trailing lines shown when a tail starts
 const MAX_LINES = 50000; // scrollback cap: lines kept here, and the most a view requests
+const FIND_MAX = 3; // matches per file a find returns (findMaxMatches server-side)
 
 const state = {
     files: [], file: null, mode: "tail", filter: "", wrap: false,
@@ -270,11 +271,16 @@ function setLoading(on, holdView) {
     if (on) logview.userScrolled = false;
 }
 
-function connect() {
+// connect (re)opens the stream for the current file and mode. locate, when
+// given, is the text of a line to select and center once rendered (set after
+// the clear, which resets it — and before the cache replay, which may already
+// contain it).
+function connect(locate) {
     if (state.source) { state.source.close(); state.source = null; }
     if (!state.file) return;
     findSeq++; // any in-flight search result is for a view that no longer exists
     logview.clear();
+    logview.locate = locate !== undefined ? locate : null;
     setLoading(false);
     setStatus("");
 
@@ -306,7 +312,7 @@ function connect() {
         for (const t of entry.lines) logview.write(null, t); // replay the cache (one batched flush)
         if (entry.done) { // a fully-read archive never grows: no request at all
             logview.flush();
-            searchApply();
+            viewSettled();
             return;
         }
         if (entry.offset >= 0) p.set("offset", String(entry.offset));
@@ -350,17 +356,7 @@ function connect() {
     src.addEventListener("eof", function () {
         if (entry && state.file && state.file.stale) entry.done = true; // archives are immutable
         logview.flush(); // render what's still queued before judging the jump target
-        searchApply(); // view: highlight the search over the now-complete file
-        if (logview.locate !== null) {
-            // The whole file streamed and the jump target never appeared
-            // (rotated away, or past the view's line cap).
-            logview.locate = null;
-            toast("line not found");
-        }
-        setLoading(false);
-        // Fully loaded: jump to the end — unless the user started reading
-        // (scrolled, or jumped to a line) while it streamed.
-        if (!logview.userScrolled) logview.pinBottom();
+        viewSettled();
         src.close(); state.source = null; setStatus("");
     });
     src.onerror = function () { setStatus("reconnecting…"); };
@@ -418,7 +414,7 @@ function renderFind(results) {
         const n = f.matches.length;
         const head = document.createElement("div");
         head.className = "find-file";
-        head.textContent = stripPrefix(f.path) + " — " + (n >= 10 ? "10+" : n) + (n === 1 ? " match" : " matches");
+        head.textContent = stripPrefix(f.path) + " — " + (n >= FIND_MAX ? FIND_MAX + "+" : n) + (n === 1 ? " match" : " matches");
         head.dataset.path = f.path;
         head.dataset.text = f.matches[0].text;
         head.title = "open " + f.path;
@@ -541,8 +537,9 @@ function searchLine(entry, re) {
 // highlights are removed first (so clearing the query deselects everything,
 // and editing it keeps just the lines that still match), then every line is
 // tested and marked. Both phases yield after ~12ms and resume on a timeout,
-// abandoning the pass the moment search.gen moves on.
-function searchApply() {
+// abandoning the pass the moment search.gen moves on. done, when given, runs
+// once the pass completes (never for an abandoned pass).
+function searchApply(done) {
     const gen = ++search.gen;
     search.stale = search.stale.concat(search.hits); // now-stale highlights to undo
     search.hits = [];
@@ -576,6 +573,7 @@ function searchApply() {
             if (performance.now() - t0 > 12) { updateSearchCount(); setTimeout(step, 0); return; }
         }
         updateSearchCount();
+        if (done) done();
     };
     step();
 }
@@ -601,6 +599,32 @@ function searchStep(dir) {
     updateSearchCount();
 }
 
+// viewSettled runs once a view's content is fully rendered (at eof, or right
+// after a fully-cached archive replays): it reports a jump target that never
+// appeared, rebuilds the search highlights, and decides where to land — on
+// the clicked line, else on the first match, else at the bottom.
+function viewSettled() {
+    if (logview.locate !== null) {
+        // The whole file rendered and the jump target never appeared
+        // (rotated away, or past the view's line cap).
+        logview.locate = null;
+        toast("line not found");
+    }
+    searchApply(function () {
+        const i = selAnchor ? search.hits.indexOf(selAnchor) : -1;
+        if (i >= 0) {
+            search.cur = i; // ▲▼ step onward from the clicked line
+            search.hits[i].classList.add("current");
+            updateSearchCount();
+        } else if (search.hits.length && !logview.userScrolled) {
+            searchStep(1); // no (surviving) target: land on the first match
+        } else if (!logview.userScrolled) {
+            logview.pinBottom(); // no search at all: the end is the news
+        }
+    });
+    setLoading(false);
+}
+
 // jumpToFile selects the file in the dropdown and views it whole (used by the
 // clickable per-line path prefix in multi-file streams). When the clicked
 // line's text is given, the view scrolls to that line and highlights it.
@@ -611,14 +635,14 @@ function jumpToFile(path, text) {
     state.file = state.files[i];
     state.mode = "grep"; // "view": the complete file (syncModeOptions syncs the select)
     // Keep the query: a view hides nothing, so a find's search carries over
-    // and its matches arrive already highlighted (searchApply runs at eof),
-    // with the clicked line centered and selected via locate.
+    // and its matches arrive already highlighted (viewSettled lands on the
+    // clicked line, or the first match when it is gone).
     updateDownload();
     syncModeOptions();
-    connect(); // clears the view — set the jump target after
-    // Normalize to rendered form: find results carry raw text whose ANSI
-    // escapes the view strips, and locate compares stripped against stripped.
-    logview.locate = text !== undefined ? text.replace(ANSI_RE, "") : null;
+    // Normalize the jump target to rendered form: find results carry raw text
+    // whose ANSI escapes the view strips, and locate compares stripped
+    // against stripped.
+    connect(text !== undefined ? text.replace(ANSI_RE, "") : null);
 }
 
 // syncModeOptions matches the mode options to the selected entry: "tail" is
@@ -743,10 +767,9 @@ function updateDownload() {
     }
 }
 
-// applyFilter runs a find. Tail and view never route here — their input
-// searches browser-side as you type.
+// applyFilter runs a find (state.filter tracks the input on every keystroke).
+// Tail and view never route here — their input searches as you type.
 function applyFilter() {
-    state.filter = el["filter-input"].value;
     connect(); // even unchanged: Enter or the button means "search now"
 }
 
@@ -763,8 +786,8 @@ function init() {
     // deliberate application: Enter or the button.
     let searchTimer = 0;
     el["filter-input"].addEventListener("input", function () {
-        if (!searchableMode()) return;
         state.filter = el["filter-input"].value;
+        if (!searchableMode()) return; // find applies deliberately, on Enter or the button
         search.gen++; // cancel the in-flight pass right away
         clearTimeout(searchTimer);
         searchTimer = setTimeout(searchApply, 300);

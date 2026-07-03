@@ -150,10 +150,12 @@ func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 // findMaxMatches and findCtxLines bound a search: the first N matches per
 // file, each with C lines of context. The bound is why find stays fast on huge
 // logs — most scans stop long before the end of the file, and the response is
-// small no matter how large the input.
+// small no matter how large the input. Find is a scent trail, not the full
+// hunt: to see more than the first matches, open the file's view and step
+// through the highlights there.
 const (
-	findMaxMatches = 10
-	findCtxLines   = 10
+	findMaxMatches = 3
+	findCtxLines   = 3
 )
 
 // findMatch is one search hit with its surrounding lines.
