@@ -8,8 +8,8 @@
 const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "/";
 // "tail" follows live files; "find" searches the selection server-side for
 // the first matches per file with context — bounded and fast on any file
-// size; "find-all" also searches rotated archives (.gz, .1, …), decoded
-// server-side. "view" (wire value "grep") shows a whole file: it is also what
+// size; "find-all" (shown as "find (incl. arch)") also searches rotated
+// archives (.gz, .1, …), decoded server-side. "view" (wire value "grep") shows a whole file: it is also what
 // clicking a find result or a line's file prefix opens. In tail and view the
 // input is a browser-side search that highlights matches as you type without
 // hiding lines (see searchApply). View works on single files only — for a
@@ -17,8 +17,8 @@ const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "
 // disabled (see syncModeOptions).
 const MODES = [
     { value: "tail", label: "tail" },
-    { value: "find", label: "find" },
-    { value: "find-all", label: "find-all" },
+    { value: "find", label: "find (excl. arch)" },
+    { value: "find-all", label: "find (incl. arch)" },
     { value: "grep", label: "view" },
 ];
 const TAIL_LINES = 10; // trailing lines shown when a tail starts

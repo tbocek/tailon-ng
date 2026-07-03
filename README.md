@@ -74,8 +74,8 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
 **find** (the first 3 matches per file with ±3 lines of context — a scent
-trail; open the file's view to step through all matches. **find-all** also
-searches rotated archives), or read whole with **view** (single files only). In tail
+trail; open the file's view to step through all matches. **find (incl. arch)**
+also searches rotated archives), or read whole with **view** (single files only). In tail
 and view the input is a browser-side **search**: matching lines and the
 matched text highlight as you type — nothing is hidden, and lines streaming in
 live are matched as they arrive — and Enter or the ▲▼ buttons step between
@@ -106,8 +106,8 @@ Rotated and compressed logs are handled the way you'd want: files that are no
 longer written to (`.gz`, `.bz2`, `.xz`, `.zst`, numeric `.1`, date-stamped
 `-YYYYMMDD`, `.old`, `.bak`) are listed as *archived* but excluded from live
 tailing, so compressed bytes never pollute the stream. Selecting one views it
-with the compression decoded transparently, and the **find-all** mode searches
-live files *and* every archive together.
+with the compression decoded transparently, and the **find (incl. arch)** mode
+searches live files *and* every archive together.
 
 Tailing is push-based on Linux: appended lines reach the browser in
 milliseconds via **inotify** (through the standard library's `syscall` package
@@ -188,8 +188,8 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments or comma-separated.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing. The web UI's find-all mode also searches them,
-decompressed transparently, and viewing one shows it decoded.
+but excluded from live tailing. The web UI's "find (incl. arch)" mode also
+searches them, decompressed transparently, and viewing one shows it decoded.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.

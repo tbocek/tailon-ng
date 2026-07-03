@@ -25,8 +25,8 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments or comma-separated.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing. The web UI's find-all mode also searches them,
-decompressed transparently, and viewing one shows it decoded.
+but excluded from live tailing. The web UI's "find (incl. arch)" mode also
+searches them, decompressed transparently, and viewing one shows it decoded.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.
