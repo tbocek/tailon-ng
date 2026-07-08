@@ -106,6 +106,10 @@ body {
 #filter-input { flex: 1 1 auto; min-width: 3em; text-align: left; }
 #filter-input::placeholder { color: #888; font-style: italic; }
 #search-count { color: #8a8f98; font-size: 12px; white-space: nowrap; }
+/* With matches beyond the shown lines the counter becomes the "continue
+   search on the server" button. */
+#search-count.more { color: var(--notice); cursor: pointer; }
+#search-count.more:hover { text-decoration: underline; }
 
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }

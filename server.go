@@ -228,6 +228,18 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	// the view's "N in file" counter, where the browser highlights only the
 	// lines it holds but the total must cover the entire file.
 	counting := query.Get("count") == "1"
+	// max raises the per-file excerpt cap (bounded): the view's "continue
+	// search" lists up to 100 matches of a single file instead of the default
+	// scent-trail few.
+	maxMatches := findMaxMatches
+	if v := query.Get("max"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > 100 {
+				n = 100
+			}
+			maxMatches = n
+		}
+	}
 	matches := make([][]findMatch, len(paths))
 	counts := make([]int64, len(paths))
 	read := make([]int64, len(paths)) // per-file bytes consumed, updated atomically
@@ -239,7 +251,7 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 			if counting {
 				counts[i] = countInFile(r.Context(), p, re, &read[i])
 			} else {
-				matches[i] = findInFile(r.Context(), p, re, &read[i])
+				matches[i] = findInFile(r.Context(), p, re, &read[i], maxMatches)
 			}
 		}(i, p)
 	}
@@ -350,7 +362,7 @@ func (c atomicCounter) Read(p []byte) (int, error) {
 // reads line-buffered and returns as soon as the last hit's after-context is
 // complete, so a scan rarely reads the whole file. A cancelled request (the
 // client navigated away) stops the scan instead of running it to the end.
-func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) []findMatch {
+func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64, maxMatches int) []findMatch {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -385,7 +397,7 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int6
 					complete = complete && len(hits[i].After) == findCtxLines
 				}
 			}
-			if len(hits) < findMaxMatches && re.MatchString(line) {
+			if len(hits) < maxMatches && re.MatchString(line) {
 				hits = append(hits, findMatch{
 					Before: append([]string{}, ring...),
 					Text:   line,
@@ -396,7 +408,7 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int6
 			if ring = append(ring, line); len(ring) > findCtxLines {
 				ring = ring[1:]
 			}
-			if len(hits) == findMaxMatches && complete {
+			if len(hits) == maxMatches && complete {
 				break // cap reached and every context is full: stop reading
 			}
 		}

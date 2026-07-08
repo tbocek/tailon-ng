@@ -682,6 +682,16 @@ func TestFindHandler(t *testing.T) {
 		t.Fatalf("cap: got %d matches", len(res[0].Matches))
 	}
 
+	// max raises the cap (the view's "continue search"), clamped to 100.
+	res = get("q=.&max=100&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	if len(res[0].Matches) != 40 { // every line of a.log matches
+		t.Fatalf("max: got %d matches, want 40", len(res[0].Matches))
+	}
+	res = get("q=.&max=9999&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	if len(res[0].Matches) != 40 {
+		t.Fatalf("max clamp: got %d matches", len(res[0].Matches))
+	}
+
 	// count=1 returns whole-file totals, past the excerpt cap (backs the
 	// view's "N in file" counter).
 	resp, err := http.Get(srv.URL + "?q=needle&count=1&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))

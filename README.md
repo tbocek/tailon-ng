@@ -74,14 +74,19 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
 **find** (the first 3 matches per file with ±3 lines of context — a scent
 trail; open the file's view to step through all matches. **find (incl. arch.)**
-also searches rotated archives), or read whole with **view** (single files only). In tail
+also searches rotated archives), or read whole with **view**. Selecting a
+single file always opens it in view — a view follows live after loading its
+backlog, so for one file view *is* tail plus history; the tail mode remains
+for groups and **All files**, whose streams merge. In tail
 and view the input is a browser-side **search**: matching lines and the
 matched text highlight as you type — nothing is hidden, and lines streaming in
 live are matched as they arrive — and Enter or the ▲▼ buttons step between
 matches. The split is labeled in the UI: **search** covers the shown lines,
 **find** scans the full files on the server — and in view the match counter
 also shows the whole-file total (server-counted), so a windowed view of a huge
-file never hides how many matches exist beyond it.
+file never hides how many matches exist beyond it. Clicking that counter
+**continues the search on the server**: it lists up to 100 matches across the
+whole file, and clicking any of them jumps back into the view at that line.
 Opening a file from a find result carries the query along, so its
 matches arrive already highlighted, centered on the clicked line.
 Tailon-ng itself is configured entirely with command-line flags.

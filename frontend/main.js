@@ -291,13 +291,15 @@ function connect(locate) {
     // and a browser-side search everywhere else, highlighting matches as you
     // type without hiding anything (see searchApply) with ▲▼ steppers.
     // Make the split visible: search is browser-side over the shown lines,
-    // find is a server-side scan of the whole files on disk.
+    // find is a server-side scan of the whole files on disk. In view the
+    // counter bridges the two — it shows the whole-file total and clicking it
+    // continues the search on the server.
     const finding = state.mode.indexOf("find") === 0;
     el["filter-input"].placeholder = finding ? "find in files (regexp)" : "search shown lines (regexp)";
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
         : "Browser-side: searches the lines loaded in this view" +
-        (state.mode === "grep" ? " — the counter also shows the whole-file total" : "");
+        (state.mode === "grep" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
 
@@ -406,6 +408,7 @@ function connect(locate) {
 // render them. findSeq guards against a stale response arriving after the user
 // already switched to another view.
 let findSeq = 0;
+let findMaxUsed = FIND_MAX; // the per-file cap the last find asked for
 async function findRequest() {
     const seq = ++findSeq;
     if (!state.filter) { setStatus("enter a search (regexp)"); return; }
@@ -414,8 +417,13 @@ async function findRequest() {
     if (state.file.all) {
         p.set("all", "1");
         if (state.file.scope) p.set("scope", state.file.scope);
+        findMaxUsed = FIND_MAX;
     } else {
+        // A single file is the "continue search" target: list up to 100
+        // matches instead of the multi-file scent-trail few.
         p.set("path", state.file.path);
+        p.set("max", "100");
+        findMaxUsed = 100;
     }
     if (state.mode === "find-all") p.set("stale", "1");
 
@@ -479,7 +487,7 @@ function renderFind(results) {
         const n = f.matches.length;
         const head = document.createElement("div");
         head.className = "find-file";
-        head.textContent = stripPrefix(f.path) + " — " + (n >= FIND_MAX ? FIND_MAX + "+" : n) + (n === 1 ? " match" : " matches");
+        head.textContent = stripPrefix(f.path) + " — " + (n >= findMaxUsed ? findMaxUsed + "+" : n) + (n === 1 ? " match" : " matches");
         head.dataset.path = f.path;
         head.dataset.text = f.matches[0].text;
         head.title = "open " + f.path;
@@ -580,11 +588,23 @@ function updateSearchCount() {
     el["search-count"].hidden = !searchableMode() || search.applied === null;
     let text = search.cur >= 0 ? (search.cur + 1) + "/" + n : n + (n === 1 ? " match" : " matches");
     // A windowed view must not hide how many matches exist beyond the lines
-    // it holds: show the server-side whole-file total when it says more.
-    if (search.fileTotal !== null && search.fileTotal > n) {
-        text += " · " + search.fileTotal + " in file";
-    }
+    // it holds: show the server-side whole-file total when it says more —
+    // clickable, continuing the search across the whole file (see
+    // continueSearch).
+    const more = search.fileTotal !== null && search.fileTotal > n;
+    if (more) text += " · " + search.fileTotal + " in file ⏵";
+    el["search-count"].classList.toggle("more", more);
+    el["search-count"].title = more ? "Continue on the server: list the matches across the whole file" : "";
     el["search-count"].textContent = text;
+}
+
+// continueSearch escalates a view search to the server: find on the same file
+// with the same query lists matches across the whole file — and clicking any
+// of them jumps back into the view at that line.
+function continueSearch() {
+    state.mode = "find";
+    syncModeOptions();
+    connect();
 }
 
 // unmark removes a line's <mark>s and merges its text nodes back together, so
@@ -755,16 +775,20 @@ function jumpToFile(path, text) {
 // files interleaved is not useful — tail or find them instead), which fall
 // back to tail. It only adjusts state — the caller connects.
 function syncModeOptions() {
-    const stale = state.file && state.file.stale; // groups are never stale
     const group = state.file && state.file.all;
     const local = state.file && state.file.local; // dropped file: view-only
-    el["mode-select"].options[0].disabled = !!stale || !!local; // options[0] is "tail"
+    // For a single file, tail and view are one thing now — a view follows
+    // live after its backlog — so single files (archived ones included) always
+    // open in view, and "tail" remains the mode for groups, whose streams
+    // merge with a per-file last-lines backlog.
+    const single = state.file && !group;
+    el["mode-select"].options[0].disabled = !!single; // options[0] is "tail"
     el["mode-select"].options[1].disabled = !!local || DEMO; // "find" and "find-all" are
     el["mode-select"].options[2].disabled = !!local || DEMO; // server-side — use the search box
     el["mode-select"].options[3].disabled = !!group; // options[3] is "view"
     if (DEMO && state.mode.indexOf("find") === 0) state.mode = "grep";
     if (local) state.mode = "grep";
-    if (stale && state.mode === "tail") state.mode = "grep";
+    if (single && state.mode === "tail") state.mode = "grep";
     if (group && state.mode === "grep") state.mode = "tail";
     el["mode-select"].value = state.mode;
 }
@@ -969,6 +993,9 @@ function init() {
     el["filter-apply"].onclick = applyFilter;
     el["search-prev"].onclick = function () { searchStep(-1); };
     el["search-next"].onclick = function () { searchStep(1); };
+    el["search-count"].addEventListener("click", function () {
+        if (el["search-count"].classList.contains("more")) continueSearch();
+    });
 
     // One delegated listener serves every line (logview.flush attaches no
     // per-line handlers). A plain click on the path prefix jumps to grepping
@@ -1067,7 +1094,7 @@ function init() {
     el["file-select"].onchange = function () {
         state.file = state.files[Number(el["file-select"].value)];
         updateDownload();
-        syncModeOptions(); // an archive can only be grepped
+        syncModeOptions(); // single files open in view; groups tail
         connect();
     };
 
