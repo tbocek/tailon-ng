@@ -57,7 +57,7 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 
 	var partial []byte
 	var prev os.FileInfo
-	caughtUp := false
+	caughtUp, notified := false, false
 
 	var w *fileWatch
 	if follow {
@@ -72,6 +72,13 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 
 		f, err := os.Open(path)
 		if err != nil {
+			// Surface the reason once — a silently empty view is undebuggable
+			// (missing file, permission denied). Follow keeps waiting: files
+			// that don't exist yet may appear.
+			if !notified {
+				notified = true
+				send("tailon-ng: "+err.Error(), -1)
+			}
 			if !follow {
 				return
 			}
@@ -105,20 +112,30 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 
 		// offset is now the absolute position of the end of data, so the
 		// position just past each line is offset minus what remains unconsumed.
+		// Lines end at "\n", "\r\n" or a lone "\r" (CR-only files exist; a file
+		// whose tail held no "\n" at all used to render as nothing).
 		data = append(partial, data...)
 		partial = nil
 		for {
-			i := bytes.IndexByte(data, '\n')
+			i := bytes.IndexAny(data, "\r\n")
 			if i < 0 {
 				if follow {
 					partial = data // hold an unterminated line until its newline arrives
 				} else if len(data) > 0 {
-					send(strings.TrimRight(string(data), "\r"), offset)
+					send(string(data), offset)
 				}
 				break
 			}
-			line := strings.TrimRight(string(data[:i]), "\r")
-			data = data[i+1:]
+			if data[i] == '\r' && i == len(data)-1 && follow {
+				partial = data // might be the first half of a CRLF pair; wait
+				break
+			}
+			line := string(data[:i])
+			skip := 1
+			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				skip = 2
+			}
+			data = data[i+skip:]
 			send(line, offset-int64(len(data)))
 		}
 
@@ -254,6 +271,11 @@ func lastLines(path string, n int) ([]string, int64) {
 	if err != nil {
 		return nil, size
 	}
+
+	// Normalize CRLF and lone CR to LF, so Windows and CR-only files split
+	// into lines too (a CR-only tail window used to come back empty).
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	data = bytes.ReplaceAll(data, []byte("\r"), []byte("\n"))
 
 	trimmed := strings.TrimRight(string(data), "\n")
 	if trimmed == "" {

@@ -1,6 +1,37 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+// TestLastLinesLineEndings checks LF, CRLF and CR-only files all split into
+// lines — a CR-only tail window used to come back empty, rendering as a blank
+// view, and CRLF lines carried an invisible trailing \r.
+func TestLastLinesLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		data string
+		want []string
+	}{
+		{"lf.log", "a\nb\nc\n", []string{"b", "c"}},
+		{"crlf.log", "a\r\nb\r\nc\r\n", []string{"b", "c"}},
+		{"cr.log", "a\rb\rc\r", []string{"b", "c"}},
+	}
+	for _, c := range cases {
+		p := filepath.Join(dir, c.name)
+		if err := os.WriteFile(p, []byte(c.data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := lastLines(p, 2)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
 
 func TestDetectLayout(t *testing.T) {
 	// A file consistently in ISO "space" format (with a continuation line that
