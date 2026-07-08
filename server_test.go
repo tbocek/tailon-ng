@@ -682,6 +682,18 @@ func TestFindHandler(t *testing.T) {
 		t.Fatalf("cap: got %d matches", len(res[0].Matches))
 	}
 
+	// count=1 returns whole-file totals, past the excerpt cap (backs the
+	// view's "N in file" counter).
+	resp, err := http.Get(srv.URL + "?q=needle&count=1&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"counts":[{"path":`) || !strings.Contains(string(body), `"n":2}`) {
+		t.Fatalf("count mode: unexpected response:\n%s", body)
+	}
+
 	// Validation and allow-listing.
 	for _, c := range []struct {
 		params string

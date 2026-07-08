@@ -608,8 +608,14 @@ function connect(locate) {
     // The one text input is the query in the find modes (the button runs it)
     // and a browser-side search everywhere else, highlighting matches as you
     // type without hiding anything (see searchApply) with ▲▼ steppers.
+    // Make the split visible: search is browser-side over the shown lines,
+    // find is a server-side scan of the whole files on disk.
     const finding = state.mode.indexOf("find") === 0;
-    el["filter-input"].placeholder = finding ? "find (regexp)" : "search (regexp)";
+    el["filter-input"].placeholder = finding ? "find in files (regexp)" : "search shown lines (regexp)";
+    el["filter-input"].title = finding
+        ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
+        : "Browser-side: searches the lines loaded in this view" +
+        (state.mode === "grep" ? " — the counter also shows the whole-file total" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
 
@@ -840,7 +846,37 @@ function commonPrefix(paths) {
 // belong to a superseded query and are removed, sliced as well, at the start
 // of the next pass. applied/re are the query the highlights were built from
 // (re non-null only while a valid query is active).
-const search = { hits: [], stale: [], cur: -1, applied: null, re: null, gen: 0 };
+const search = { hits: [], stale: [], cur: -1, applied: null, re: null, gen: 0, fileTotal: null };
+
+// The browser can only search the lines it holds; in view mode the counter
+// additionally shows the whole-file total, counted server-side (debounced —
+// a full-file scan per keystroke would be wasteful on huge files).
+let countTimer = 0, countSeq = 0;
+function scheduleFileCount() {
+    clearTimeout(countTimer);
+    search.fileTotal = null;
+    if (DEMO || state.mode !== "grep" || !state.file || state.file.all || state.file.local || !search.re) return;
+    const seq = ++countSeq;
+    const q = search.applied;
+    const path = state.file.path;
+    countTimer = setTimeout(async function () {
+        let total = null;
+        try {
+            const p = new URLSearchParams({ q: q, count: "1", path: path });
+            const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString());
+            if (!resp.ok) return;
+            // NDJSON: skip the progress lines, take the counts line.
+            for (const line of (await resp.text()).split("\n")) {
+                if (!line) continue;
+                const obj = JSON.parse(line);
+                if (obj.counts) total = obj.counts.length ? obj.counts[0].n : 0;
+            }
+        } catch (e) { return; }
+        if (seq !== countSeq || total === null) return;
+        search.fileTotal = total;
+        updateSearchCount();
+    }, 600);
+}
 
 function searchableMode() { return state.mode === "tail" || state.mode === "grep"; }
 
@@ -851,14 +887,22 @@ function searchReset() {
     search.cur = -1;
     search.applied = null;
     search.re = null;
+    search.fileTotal = null;
+    clearTimeout(countTimer);
+    countSeq++;
     updateSearchCount();
 }
 
 function updateSearchCount() {
     const n = search.hits.length;
     el["search-count"].hidden = !searchableMode() || search.applied === null;
-    el["search-count"].textContent =
-        search.cur >= 0 ? (search.cur + 1) + "/" + n : n + (n === 1 ? " match" : " matches");
+    let text = search.cur >= 0 ? (search.cur + 1) + "/" + n : n + (n === 1 ? " match" : " matches");
+    // A windowed view must not hide how many matches exist beyond the lines
+    // it holds: show the server-side whole-file total when it says more.
+    if (search.fileTotal !== null && search.fileTotal > n) {
+        text += " · " + search.fileTotal + " in file";
+    }
+    el["search-count"].textContent = text;
 }
 
 // unmark removes a line's <mark>s and merges its text nodes back together, so
@@ -931,6 +975,7 @@ function searchApply(done) {
             search.re = re;
         }
     }
+    scheduleFileCount(); // view mode: the whole-file total, counted server-side
     let i = 0;
     const step = function () {
         if (gen !== search.gen) return; // superseded: the newer pass owns the cleanup

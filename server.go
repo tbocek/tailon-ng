@@ -224,12 +224,24 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 			total += fi.Size()
 		}
 	}
+	// count=1 asks for whole-file match totals instead of excerpts: it backs
+	// the view's "N in file" counter, where the browser highlights only the
+	// lines it holds but the total must cover the entire file.
+	counting := query.Get("count") == "1"
 	matches := make([][]findMatch, len(paths))
+	counts := make([]int64, len(paths))
 	read := make([]int64, len(paths)) // per-file bytes consumed, updated atomically
 	var wg sync.WaitGroup
 	for i, p := range paths {
 		wg.Add(1)
-		go func(i int, p string) { defer wg.Done(); matches[i] = findInFile(r.Context(), p, re, &read[i]) }(i, p)
+		go func(i int, p string) {
+			defer wg.Done()
+			if counting {
+				counts[i] = countInFile(r.Context(), p, re, &read[i])
+			} else {
+				matches[i] = findInFile(r.Context(), p, re, &read[i])
+			}
+		}(i, p)
 	}
 	scansDone := make(chan struct{})
 	go func() { wg.Wait(); close(scansDone) }()
@@ -261,6 +273,20 @@ progress:
 		}
 	}
 
+	if counting {
+		type fileCount struct {
+			Path string `json:"path"`
+			N    int64  `json:"n"`
+		}
+		out := make([]fileCount, len(paths))
+		for i, p := range paths {
+			out[i] = fileCount{p, counts[i]}
+		}
+		json.NewEncoder(w).Encode(struct {
+			Counts []fileCount `json:"counts"`
+		}{out})
+		return
+	}
 	results := []findResult{}
 	for i, p := range paths {
 		if len(matches[i]) > 0 {
@@ -270,6 +296,39 @@ progress:
 	json.NewEncoder(w).Encode(struct {
 		Results []findResult `json:"results"`
 	}{results})
+}
+
+// countInFile returns how many lines match re — the whole file, uncapped
+// (unlike findInFile there is no early exit; a count must cover everything).
+func countInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	var rd io.Reader = atomicCounter{f, nRead}
+	if d := decoder(path); d != nil {
+		if rd, err = d(rd); err != nil {
+			return 0
+		}
+		defer closeDecoder(rd)
+	}
+
+	br := bufio.NewReader(rd)
+	var n int64
+	for i := 0; ; i++ {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return n
+		}
+		line, err := br.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if (line != "" || err == nil) && re.MatchString(line) {
+			n++
+		}
+		if err != nil {
+			return n
+		}
+	}
 }
 
 // atomicCounter counts bytes read through it, safe to read from the progress
