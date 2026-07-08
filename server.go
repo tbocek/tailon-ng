@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -212,14 +213,53 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 		paths = []string{path}
 	}
 
-	// Scan the files concurrently; each stops at its match cap.
+	// Scan the files concurrently; each stops at its match cap. The response
+	// is NDJSON: progress lines {"d","t"} while the scan runs (driving the
+	// client's 0-100 bar — a rare needle means reading everything), then one
+	// final {"results": [...]} line. Progress counts on-disk bytes even for
+	// archives: the counter sits under the decompressor.
+	var total int64
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			total += fi.Size()
+		}
+	}
 	matches := make([][]findMatch, len(paths))
+	read := make([]int64, len(paths)) // per-file bytes consumed, updated atomically
 	var wg sync.WaitGroup
 	for i, p := range paths {
 		wg.Add(1)
-		go func(i int, p string) { defer wg.Done(); matches[i] = findInFile(r.Context(), p, re) }(i, p)
+		go func(i int, p string) { defer wg.Done(); matches[i] = findInFile(r.Context(), p, re, &read[i]) }(i, p)
 	}
-	wg.Wait()
+	scansDone := make(chan struct{})
+	go func() { wg.Wait(); close(scansDone) }()
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
+	rc := http.NewResponseController(w)
+	pct := -1
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+progress:
+	for {
+		select {
+		case <-scansDone:
+			break progress
+		case <-ticker.C:
+			var done int64
+			for i := range read {
+				done += atomic.LoadInt64(&read[i])
+			}
+			if total <= 0 {
+				continue
+			}
+			if p := int(done * 100 / total); p != pct {
+				pct = p
+				fmt.Fprintf(w, "{\"d\":%d,\"t\":%d}\n", done, total)
+				rc.Flush()
+			}
+		}
+	}
 
 	results := []findResult{}
 	for i, p := range paths {
@@ -227,8 +267,23 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 			results = append(results, findResult{Path: p, Matches: matches[i]})
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	json.NewEncoder(w).Encode(struct {
+		Results []findResult `json:"results"`
+	}{results})
+}
+
+// atomicCounter counts bytes read through it, safe to read from the progress
+// ticker while a scan goroutine advances it (unlike tailer.go's countingReader,
+// which stays within one goroutine).
+type atomicCounter struct {
+	r io.Reader
+	n *int64
+}
+
+func (c atomicCounter) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	atomic.AddInt64(c.n, int64(n))
+	return n, err
 }
 
 // findInFile returns the first findMaxMatches hits in the file (decoded if
@@ -236,15 +291,17 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 // reads line-buffered and returns as soon as the last hit's after-context is
 // complete, so a scan rarely reads the whole file. A cancelled request (the
 // client navigated away) stops the scan instead of running it to the end.
-func findInFile(ctx context.Context, path string, re *regexp.Regexp) []findMatch {
+func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) []findMatch {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	var rd io.Reader = f
+	// The counter sits between the file and the decoder, so progress measures
+	// on-disk bytes for plain and compressed files alike.
+	var rd io.Reader = atomicCounter{f, nRead}
 	if d := decoder(path); d != nil {
-		if rd, err = d(f); err != nil {
+		if rd, err = d(rd); err != nil {
 			return nil
 		}
 		defer closeDecoder(rd)
@@ -420,7 +477,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	// the same on-disk size they too get a real 0-100 bar.
 	var progTotal, progDone int64
 	progPct := -1
-	if !follow {
+	// Also for a follow stream resuming from a known offset (a cached view or
+	// tail): its catch-up is bounded by the size at connect time, so it can
+	// report 0-100 too; lines appended later just stay pinned at 100.
+	if !follow || start >= 0 {
 		if fi, err := os.Stat(paths[0]); err == nil {
 			progTotal = fi.Size()
 		}
@@ -430,7 +490,11 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			return true
 		}
 		progDone = pos
-		if pct := int(progDone * 100 / progTotal); pct != progPct {
+		pct := int(progDone * 100 / progTotal)
+		if pct > 100 {
+			pct = 100 // data appended after connect would push past the total
+		}
+		if pct != progPct {
 			progPct = pct
 			if _, err := fmt.Fprintf(w, "event: progress\ndata: {\"d\":%d,\"t\":%d}\n\n", progDone, progTotal); err != nil {
 				return false

@@ -217,6 +217,9 @@ body {
 #logview .log-entry.match { background: rgba(255, 151, 79, 0.08); }
 #logview .find-gap { color: #555a62; padding: 2px 8px; user-select: none; }
 
+/* Dragging a file over the page: show where it will land. */
+body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -6px; }
+
 /* Toast: brief confirmation (e.g. "3 lines copied"), bottom-center. */
 #toast {
     position: fixed;

@@ -477,6 +477,46 @@ func TestStreamResume(t *testing.T) {
 	}
 }
 
+// TestViewFollowsAppends checks the live view: tail with offset=0 renders the
+// whole backlog (not just the last nlines), signals live, then keeps following
+// so new lines append — reading only the appended bytes.
+func TestViewFollowsAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.log")
+	if err := os.WriteFile(path, []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config = defaultConfig()
+	config.Sources = []string{path}
+	createListing(config.Sources)
+
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=tail&offset=0&nlines=2&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// offset=0 must yield the full backlog — all three lines, despite nlines=2.
+	got := frameTexts(readSSEData(t, resp.Body, 3, 5*time.Second))
+	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("backlog: got %v, want %v", got, want)
+	}
+
+	// And it follows: an appended line arrives.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("d\n")
+	f.Close()
+	got = frameTexts(readSSEData(t, resp.Body, 1, 5*time.Second))
+	if want := []string{"d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("append: got %v, want %v", got, want)
+	}
+}
+
 // TestStreamProgress checks that grep loads report byte progress and finish at
 // done == total (the client's 0-100 bar).
 func TestStreamProgress(t *testing.T) {
@@ -588,6 +628,7 @@ func TestFindHandler(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(findHandler))
 	defer srv.Close()
 
+	// The response is NDJSON: zero or more progress lines, then the results.
 	get := func(params string) []findResult {
 		t.Helper()
 		resp, err := http.Get(srv.URL + "?" + params)
@@ -595,11 +636,28 @@ func TestFindHandler(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		var out []findResult
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			t.Fatalf("bad JSON: %v", err)
+		dec := json.NewDecoder(resp.Body)
+		var results []findResult
+		seen := false
+		for {
+			var line struct {
+				D       int64        `json:"d"`
+				T       int64        `json:"t"`
+				Results []findResult `json:"results"`
+			}
+			if err := dec.Decode(&line); err == io.EOF {
+				break
+			} else if err != nil {
+				t.Fatalf("bad NDJSON line: %v", err)
+			}
+			if line.Results != nil {
+				results, seen = line.Results, true
+			}
 		}
-		return out
+		if !seen {
+			t.Fatal("no results line in the response")
+		}
+		return results
 	}
 
 	// Live files only: one file, two matches, full context on both sides.

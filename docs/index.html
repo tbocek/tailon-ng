@@ -31,6 +31,13 @@
         }
         .btn.primary { background: var(--accent); color: #1d1f21; border-color: var(--accent); }
         .btn:hover { text-decoration: none; border-color: var(--accent); }
+        .demo-banner {
+            display: block; max-width: 640px; margin: 22px auto 0; padding: 12px 20px;
+            background: rgba(255, 151, 79, 0.08); border: 1px solid var(--accent);
+            border-radius: 8px; color: var(--fg); text-align: center;
+        }
+        .demo-banner:hover { background: rgba(255, 151, 79, 0.15); text-decoration: none; }
+        .demo-banner b { color: var(--accent); }
         .shot {
             display: block; width: 100%; margin: 32px auto; border: 1px solid var(--line);
             border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
@@ -67,8 +74,13 @@
         <p class="tagline">A tiny, dependency-free web viewer that <strong>tail</strong>s and <strong>grep</strong>s your log files — right in the browser.</p>
         <div class="badges">
             <a class="btn primary" href="https://github.com/tbocek/tailon-ng">GitHub</a>
+            <a class="btn" href="demo.html">Live demo</a>
             <a class="btn" href="https://github.com/tbocek/tailon-ng/releases">Download</a>
         </div>
+        <a class="demo-banner" href="demo.html">
+            Test it with <b>your own logs</b> — drag a <code>.log</code> or <code>.gz</code> onto the
+            live demo. Browser-only: nothing is uploaded, there is no backend.
+        </a>
     </header>
 
     <img class="shot" src="scr.png" alt="Tailon-ng — the All files view merging several logs in timestamp order">

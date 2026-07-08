@@ -261,7 +261,16 @@ func lastLines(path string, n int) ([]string, int64) {
 	}
 	size := info.Size()
 
-	const maxRead = 256 * 1024
+	// The read window scales with n: tail's 10-line backlog needs little; the
+	// view's full-scrollback backlog (MAX_LINES) far more — but bounded, so a
+	// multi-gigabyte file is never read whole just to show its tail.
+	maxRead := int64(n) * 512
+	if maxRead < 256*1024 {
+		maxRead = 256 * 1024
+	}
+	if maxRead > 16*1024*1024 {
+		maxRead = 16 * 1024 * 1024
+	}
 	start := int64(0)
 	if size > maxRead {
 		start = size - maxRead

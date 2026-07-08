@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,6 +31,28 @@ func TestLastLinesLineEndings(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// TestLastLinesWindowScales checks the backlog read window grows with n: a
+// view asking for the full scrollback must reach past the old 256KB cap.
+func TestLastLinesWindowScales(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "big.log")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 5000 // ~600KB, comfortably past 256KB
+	for i := 0; i < total; i++ {
+		fmt.Fprintf(f, "line %05d with some padding to reach realistic length %060d\n", i, i)
+	}
+	f.Close()
+
+	if lines, _ := lastLines(p, 50000); len(lines) != total {
+		t.Fatalf("want the whole file (%d lines) within the scaled window, got %d", total, len(lines))
+	}
+	if lines, _ := lastLines(p, 10); len(lines) != 10 {
+		t.Fatalf("small n: want 10 lines, got %d", len(lines))
 	}
 }
 

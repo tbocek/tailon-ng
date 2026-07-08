@@ -5,6 +5,15 @@ command -v git >/dev/null || { echo "error: git not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "error: curl not found" >&2; exit 1; }
 command -v jq >/dev/null || { echo "error: jq not found" >&2; exit 1; }
 
+# Regenerate the demo page from the current frontend, so a release never
+# ships a stale docs/demo.html. If it changed, commit just that refresh.
+./make-demo.sh
+if ! git diff --quiet -- docs/demo.html; then
+  git add docs/demo.html
+  git commit -m "regenerate demo.html"
+  echo "docs/demo.html refreshed and committed"
+fi
+
 # Check that the working tree is clean
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "error: working tree is not clean. Commit or stash changes first." >&2
