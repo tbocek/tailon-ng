@@ -32,4 +32,32 @@ html = re.sub(r'{{\s*template "body" \.\s*}}',
 assert "{{" not in html, "unresolved template tokens in demo.html"
 pathlib.Path("docs/demo.html").write_text(html)
 print("docs/demo.html: %d bytes" % len(html))
+
+# Keep the website's lines-of-code claim honest: count the real thing and
+# patch every "about N lines of code" occurrence (rounded to the nearest 100).
+go_files = ["main.go", "server.go", "tailer.go", "filelister.go", "frontend.go",
+            "watcher_linux.go", "watcher_other.go"]
+def code_lines(path, comment):
+    n = 0
+    for line in pathlib.Path(path).read_text().splitlines():
+        s = line.strip()
+        if s and not s.startswith(comment):
+            n += 1
+    return n
+
+total = sum(code_lines(f, "//") for f in go_files)
+total += code_lines("frontend/main.js", "//")
+total += sum(1 for l in pathlib.Path("frontend/main.css").read_text().splitlines()
+             if l.strip() and not l.strip().startswith(("/*", "*")))
+total += sum(1 for l in (pathlib.Path("frontend/base.html").read_text() +
+                         pathlib.Path("frontend/tailon.html").read_text()).splitlines()
+             if l.strip())
+rounded = "{:,}".format(round(total / 100) * 100)
+
+idx = pathlib.Path("docs/index.html")
+html = idx.read_text()
+html, n = re.subn(r"([Aa]bout) [\d,]+ lines of code",
+                  lambda m: "%s %s lines of code" % (m.group(1), rounded), html)
+idx.write_text(html)
+print("lines of code: %d -> claim 'about %s' (%d spots patched)" % (total, rounded, n))
 EOF

@@ -312,36 +312,6 @@ progress:
 
 // countInFile returns how many lines match re — the whole file, uncapped
 // (unlike findInFile there is no early exit; a count must cover everything).
-func countInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) int64 {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	var rd io.Reader = atomicCounter{f, nRead}
-	if d := decoder(path); d != nil {
-		if rd, err = d(rd); err != nil {
-			return 0
-		}
-		defer closeDecoder(rd)
-	}
-
-	br := bufio.NewReader(rd)
-	var n int64
-	for i := 0; ; i++ {
-		if i%1024 == 0 && ctx.Err() != nil {
-			return n
-		}
-		line, err := br.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
-		if (line != "" || err == nil) && re.MatchString(line) {
-			n++
-		}
-		if err != nil {
-			return n
-		}
-	}
-}
 
 // atomicCounter counts bytes read through it, safe to read from the progress
 // ticker while a scan goroutine advances it (unlike tailer.go's countingReader,
@@ -362,10 +332,14 @@ func (c atomicCounter) Read(p []byte) (int, error) {
 // reads line-buffered and returns as soon as the last hit's after-context is
 // complete, so a scan rarely reads the whole file. A cancelled request (the
 // client navigated away) stops the scan instead of running it to the end.
-func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64, maxMatches int) []findMatch {
+// scanLines reads path line by line — decoded if compressed, with consumed
+// on-disk bytes counted into nRead for progress — and calls fn per line until
+// fn returns false, the file ends, or the request is cancelled (the client
+// navigated away; don't finish a scan nobody reads).
+func scanLines(ctx context.Context, path string, nRead *int64, fn func(line string) bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return
 	}
 	defer f.Close()
 	// The counter sits between the file and the decoder, so progress measures
@@ -373,50 +347,70 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int6
 	var rd io.Reader = atomicCounter{f, nRead}
 	if d := decoder(path); d != nil {
 		if rd, err = d(rd); err != nil {
-			return nil
+			return
 		}
 		defer closeDecoder(rd)
 	}
 
 	br := bufio.NewReader(rd)
-	var ring []string // the last findCtxLines lines, before-context for the next hit
-	var hits []findMatch
-	for n := 0; ; n++ {
-		if n%1024 == 0 && ctx.Err() != nil {
-			return hits
+	for i := 0; ; i++ {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return
 		}
 		line, err := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
-		if line != "" || err == nil {
-			// Every line first serves as after-context for the open hits (a
-			// matching line inside another's context included, like grep -C).
-			complete := true
-			for i := range hits {
-				if len(hits[i].After) < findCtxLines {
-					hits[i].After = append(hits[i].After, line)
-					complete = complete && len(hits[i].After) == findCtxLines
-				}
-			}
-			if len(hits) < maxMatches && re.MatchString(line) {
-				hits = append(hits, findMatch{
-					Before: append([]string{}, ring...),
-					Text:   line,
-					After:  []string{},
-				})
-				complete = false
-			}
-			if ring = append(ring, line); len(ring) > findCtxLines {
-				ring = ring[1:]
-			}
-			if len(hits) == maxMatches && complete {
-				break // cap reached and every context is full: stop reading
-			}
+		if (line != "" || err == nil) && !fn(line) {
+			return
 		}
 		if err != nil {
-			return hits
+			return
 		}
 	}
+}
+
+// findInFile returns the first maxMatches hits in the file, each with up to
+// findCtxLines lines of context on both sides, stopping as soon as the last
+// hit's after-context is complete — a scan rarely reads the whole file.
+func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64, maxMatches int) []findMatch {
+	var ring []string // the last findCtxLines lines, before-context for the next hit
+	var hits []findMatch
+	scanLines(ctx, path, nRead, func(line string) bool {
+		// Every line first serves as after-context for the open hits (a
+		// matching line inside another's context included, like grep -C).
+		complete := true
+		for i := range hits {
+			if len(hits[i].After) < findCtxLines {
+				hits[i].After = append(hits[i].After, line)
+				complete = complete && len(hits[i].After) == findCtxLines
+			}
+		}
+		if len(hits) < maxMatches && re.MatchString(line) {
+			hits = append(hits, findMatch{
+				Before: append([]string{}, ring...),
+				Text:   line,
+				After:  []string{},
+			})
+			complete = false
+		}
+		if ring = append(ring, line); len(ring) > findCtxLines {
+			ring = ring[1:]
+		}
+		return len(hits) < maxMatches || !complete // done: cap reached, contexts full
+	})
 	return hits
+}
+
+// countInFile returns how many lines match re — the whole file, uncapped
+// (unlike findInFile there is no early exit; a count must cover everything).
+func countInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) int64 {
+	var n int64
+	scanLines(ctx, path, nRead, func(line string) bool {
+		if re.MatchString(line) {
+			n++
+		}
+		return true
+	})
+	return n
 }
 
 // mergeInterval is how often all-files mode flushes its buffer of lines, sorted

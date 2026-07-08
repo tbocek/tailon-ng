@@ -49,7 +49,7 @@ lineage](#project-lineage)). Same job, far less machinery:
 The result is a smaller, self-contained binary you can read and audit in one
 sitting — no Node/npm, no asset pipeline, nothing to vendor. Prefer the original's
 Vue UI and configuration-file setup? Use [gvalkov/tailon]. Want a tiny,
-dependency-free log tailer? Use this.
+self-contained log tailer? Use this.
 
 ## Install
 
@@ -278,7 +278,7 @@ the source of the recurring "wait, which tailon?" confusion:
    configured through a file and released with GoReleaser. **This is the upstream
    this repository is forked from.**
 3. **This fork (tailon-ng)** — drops the third-party frontend and tooling for a
-   framework-free, dependency-free, single static binary. See [How this fork
+   framework-free, nearly dependency-free, single static binary. See [How this fork
    differs from the original](#how-this-fork-differs-from-the-original) for the
    point-by-point comparison.
 
