@@ -79,6 +79,26 @@ go install github.com/tbocek/tailon-ng@latest
 
 Prebuilt binaries are also attached to every entry on the [releases] page.
 
+### Docker
+
+A multi-arch (amd64/arm64) image is published to the GitHub Container Registry
+on every release. Paths to serve are passed as arguments, exactly as on the
+command line:
+
+```
+docker run --rm -p 127.0.0.1:8080:8080 -v /var/log:/var/log:ro \
+  ghcr.io/tbocek/tailon-ng:latest /var/log
+```
+
+`:latest` is the newest release, `:X.Y.Z`/`:X.Y` pin a version. The image is
+built `FROM` [distroless] `static` — just the static binary, no shell or
+package manager — and runs as a non-root user. That non-root user (uid 65532)
+must be able to *read* the logs you mount: for root-only files such as
+`/var/log/syslog`, either mount them readable, add `--user` with a uid/gid that
+can read them (e.g. `--user 0` to run as root), or point tailon-ng at
+application logs it can already read. Bind the published port to localhost or a
+private interface — tailon-ng has no authentication (see [Security](#security)).
+
 ## Usage
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
@@ -335,6 +355,7 @@ Tailon-ng is released under the terms of the [Apache 2.0 License].
 [log.io]:         http://logio.org/
 [rtail]:          http://rtail.org/
 [RE2]:            https://github.com/google/re2/wiki/Syntax
+[distroless]:     https://github.com/GoogleContainerTools/distroless
 [ulikunitz/xz]:   https://github.com/ulikunitz/xz
 [klauspost/compress]: https://github.com/klauspost/compress
 [Apache 2.0 License]: LICENSE
