@@ -92,12 +92,12 @@ docker run --rm -p 127.0.0.1:8080:8080 -v /var/log:/var/log:ro \
 
 `:latest` is the newest release, `:X.Y.Z`/`:X.Y` pin a version. The image is
 built `FROM` [distroless] `static` — just the static binary, no shell or
-package manager — and runs as a non-root user. That non-root user (uid 65532)
-must be able to *read* the logs you mount: for root-only files such as
-`/var/log/syslog`, either mount them readable, add `--user` with a uid/gid that
-can read them (e.g. `--user 0` to run as root), or point tailon-ng at
-application logs it can already read. Bind the published port to localhost or a
-private interface — tailon-ng has no authentication (see [Security](#security)).
+package manager. It runs as root so it can read root-owned system logs (such as
+`/var/log/syslog`) out of the box; to drop privileges when you only serve logs
+a non-root user can read, add `--user` (for example `--user 65532`, or
+`--user 65532:4` to keep the owning group's read access). Either way the mount
+is read-only. Bind the published port to localhost or a private interface —
+tailon-ng has no authentication (see [Security](#security)).
 
 ## Usage
 
