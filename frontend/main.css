@@ -66,17 +66,12 @@ body {
     to { background-position: 140% 0; }
 }
 
-/* Version badge, far right in the toolbar: links to the releases page. */
-#version { margin-left: auto; flex: 0 0 auto; color: #8a8f98; font-size: 12px; }
-#version:hover { color: var(--notice); }
-
 /* On narrow windows the file selector and filter give way first; the fixed
-   controls (mode, checkboxes, download) keep their size. */
+   controls (mode, find button, the right-edge group) keep their size. */
 #file-select { flex: 0 1 auto; min-width: 7em; }
-#toolbar label,
 #mode-select,
 #filter-apply,
-#action-download { flex: 0 0 auto; }
+#toolbar .right { flex: 0 0 auto; }
 
 @media (max-width: 800px) {
     #toolbar { gap: 6px; }
@@ -98,13 +93,39 @@ body {
 #toolbar button:hover,
 #action-download:hover { background: var(--hover); }
 #toolbar label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-#toolbar input[type="checkbox"] { height: auto; margin: 0; border: 0; }
+#toolbar input[type="checkbox"] { height: auto; margin: 0; border: 0; accent-color: var(--notice); }
 
 /* The filter input and its apply button form one tight group. It takes the
    spare width on large windows and shrinks before anything else on small ones. */
 #toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; min-width: 7em; }
-#filter-input { flex: 1 1 auto; min-width: 3em; text-align: left; }
+#toolbar .filter select { flex: 0 0 auto; } /* the find-shape selects keep their size */
 #filter-input::placeholder { color: #888; font-style: italic; }
+
+/* The search toggles (match case, regexp, invert) sit inside the input's
+   right edge, editor-style: the wrapper anchors them and the input's right
+   padding reserves their width so text never runs underneath. A toggled-on
+   button carries the accent. */
+#toolbar .input-wrap { position: relative; display: flex; flex: 1 1 auto; min-width: 3em; }
+#filter-input { width: 100%; padding-right: 64px; text-align: left; }
+/* The browser's default (blue) focus ring clashes with the theme and draws
+   underneath the inset toggles; mark focus on the input's own border in the
+   accent color instead. */
+#filter-input:focus { outline: none; border-color: var(--notice); }
+.input-toggles { position: absolute; top: 50%; right: 3px; transform: translateY(-50%); display: flex; gap: 2px; }
+#toolbar .input-toggles button {
+    height: 18px;
+    padding: 0 3px;
+    font: 11px/1 var(--mono);
+    color: #8a8f98;
+    background: transparent;
+    border-color: transparent;
+}
+#toolbar .input-toggles button:hover { background: var(--hover); color: var(--fg); }
+#toolbar .input-toggles button.on {
+    color: var(--notice);
+    border-color: var(--notice);
+    background: rgba(255, 151, 79, 0.12);
+}
 #search-count { color: #8a8f98; font-size: 12px; white-space: nowrap; }
 /* With matches beyond the shown lines the counter becomes the "continue
    search on the server" button. */
@@ -113,6 +134,10 @@ body {
 
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }
+
+/* Download and the ☰ settings button, pinned to the toolbar's right edge. */
+#toolbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+#menu-toggle { width: 26px; padding: 0; }
 
 #action-download {
     display: inline-flex;
@@ -123,6 +148,25 @@ body {
     background: var(--input);
 }
 #action-download svg { width: 14px; height: 14px; fill: var(--fg); }
+
+/* The ☰ menu drops down below the toolbar's right edge: the persisted
+   settings as checkbox rows, the version link (to the releases page) last. */
+#menu {
+    position: absolute;
+    top: 100%;
+    right: 4px;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bar);
+    border: 1px solid #555a62;
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+#version { color: #8a8f98; font-size: 12px; border-top: 1px solid #3a3e44; padding-top: 8px; }
+#version:hover { color: var(--notice); }
 
 #status {
     position: fixed;
@@ -200,26 +244,41 @@ body {
     box-shadow: inset 3px 0 0 var(--notice);
 }
 
-/* The per-line file prefix in multi-file streams: click to open that file. */
-#logview .path-link { color: #8a8f98; cursor: pointer; }
+/* The per-line file prefix in multi-file streams: click to open that file.
+   Each file carries a stable muted color (--fc, set per line from the JS
+   palette) so interleaved files are told apart at a glance. */
+#logview .path-link { color: var(--fc, #8a8f98); cursor: pointer; }
 #logview .path-link:hover { color: var(--notice); text-decoration: underline; }
 
-/* Find mode: one block per file, separated by a rule. The header opens the
-   complete file with the first match selected; context lines are dimmed and
-   match lines carry a faint warm tint. "···" separates match groups. */
+/* Find mode: one block per file, separated by an accent-colored rule. The
+   header opens the complete file with the first match selected; context lines
+   are dimmed and match lines carry a faint warm tint. "···" separates match
+   groups. */
 #logview .find-file {
     display: block;
     margin-top: 10px;
     padding: 6px 8px 2px;
-    border-top: 1px solid #3a3e44;
+    border-top: 1px solid var(--notice);
     color: var(--notice);
     font-weight: bold;
     cursor: pointer;
 }
+/* The rule separates files: the first header (a single file's only one
+   included) has nothing above it to separate from. */
+#logview .find-file:first-child { border-top: none; margin-top: 0; }
 #logview .find-file:hover { text-decoration: underline; }
 #logview .log-entry.ctx { color: #8a8f98; }
 #logview .log-entry.match { background: rgba(255, 151, 79, 0.08); }
-#logview .find-gap { color: #555a62; padding: 2px 8px; user-select: none; }
+/* The gap between two match excerpts of one file: a small horizontal "· · ·",
+   quieter than a log line so it reads as elision, not content. */
+#logview .find-gap {
+    color: #555a62;
+    padding: 1px 8px;
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 5px;
+    user-select: none;
+}
 
 /* Dragging a file over the page: show where it will land. */
 body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -6px; }

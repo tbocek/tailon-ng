@@ -84,6 +84,52 @@ func TestDetectLayout(t *testing.T) {
 	}
 }
 
+// TestPrimeTimestamper checks a stamper primed from the file: the layout comes
+// from the trailing lines, and the "previous date" undated backlog lines
+// inherit is the last one before the backlog window — found by looking back in
+// the log, so a backlog that starts mid-entry (a stack trace, say) sorts with
+// its entry instead of as "now".
+func TestPrimeTimestamper(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "p.log")
+	data := "2026-06-29 17:00:00 started\n" +
+		"2026-06-29 17:05:00 crashed\n" +
+		"  at frame one\n" +
+		"  at frame two\n" +
+		"  at frame three\n"
+	if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The backlog is the last 3 lines — all undated continuations.
+	ts := primeTimestamper(p, 3)
+	if ts.layout != "2006-01-02 15:04:05.999999999" {
+		t.Fatalf("layout = %q", ts.layout)
+	}
+	want, _ := matchAny("2026-06-29 17:05:00")
+	if !ts.last.Equal(want) {
+		t.Fatalf("last = %v, want %v", ts.last, want)
+	}
+	if got := ts.stamp("  at frame one"); !got.Equal(want) {
+		t.Fatalf("undated backlog line stamped %v, want the primed %v", got, want)
+	}
+
+	// A file with no timestamps at all locks "none": stamping falls back to
+	// time.Now — ordering by arrival, never displayed.
+	np := filepath.Join(dir, "n.log")
+	if err := os.WriteFile(np, []byte("plain\nlines\nonly\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ts := primeTimestamper(np, 2); ts.layout != "none" || !ts.last.IsZero() {
+		t.Fatalf("undated file: layout=%q last=%v", ts.layout, ts.last)
+	}
+
+	// A backlog window larger than the file: nothing precedes it, no last.
+	if ts := primeTimestamper(p, 99); !ts.last.IsZero() {
+		t.Fatalf("skip beyond file: last = %v, want zero", ts.last)
+	}
+}
+
 func TestMatchAny(t *testing.T) {
 	cases := []struct {
 		line  string

@@ -13,6 +13,16 @@
 > [How this fork differs from the original](#how-this-fork-differs-from-the-original)
 > spells out exactly what changed and why you might pick it over upstream.
 
+**Do one thing, but do it right.** Tailon-ng tails and greps your log files
+from the browser — and that is the whole feature list. There is no dashboard
+builder, no ingestion pipeline, no query language, no agents and no config
+file to learn. The effort goes into doing that one job properly: live tailing
+that arrives in milliseconds, a bounded server-side find that stays fast on
+huge files and rotated archives, an append-aware cache that makes switching
+views instant, logs from many hosts merged in timestamp order, and a UI that
+sweats the details — editor-style search toggles, real progress bars, ANSI
+colors — while staying a handful of flat, framework-free files.
+
 Tailon-ng is a webapp for looking at and searching through log files from your
 browser. It serves files — single files, globs or whole directories — and lets
 you **tail** them live or **grep** through them, with a regular-expression
@@ -72,16 +82,20 @@ Prebuilt binaries are also attached to every entry on the [releases] page.
 ## Usage
 
 Files are watched in **tail** mode (follow live, like `tail -f`), searched with
-**find** (the first 3 matches per file with ±3 lines of context — a scent
-trail; open the file's view to step through all matches. **find (incl. arch.)**
-also searches rotated archives), or read whole with **view**. Selecting a
+**find** (the first matches per file with a few lines of context — a scent
+trail; open the file's view to step through all matches. Two selects next to
+the query adjust the shape: matches per file — up to "all", capped at 100 —
+and ±0–10 context lines. A match inside a previous match's context merges
+into that excerpt, highlighted where it stands, instead of repeating), or
+read whole with **view**. Selecting a
 single file always opens it in view — a view follows live after loading its
 backlog, so for one file view *is* tail plus history; the tail mode remains
 for groups and **All files**, whose streams merge. In tail
 and view the input is a browser-side **search**: matching lines and the
 matched text highlight as you type — nothing is hidden, and lines streaming in
 live are matched as they arrive — and Enter or the ▲▼ buttons step between
-matches. The split is labeled in the UI: **search** covers the shown lines,
+matches. The search covers each line's file content only: the `file:` prefix
+merged streams prepend is UI chrome, not searchable text. The split is labeled in the UI: **search** covers the shown lines,
 **find** scans the full files on the server — and in view the match counter
 also shows the whole-file total (server-counted), so a windowed view of a huge
 file never hides how many matches exist beyond it. Clicking that counter
@@ -90,6 +104,18 @@ whole file, and clicking any of them jumps back into the view at that line.
 Opening a file from a find result carries the query along, so its
 matches arrive already highlighted, centered on the clicked line.
 Tailon-ng itself is configured entirely with command-line flags.
+
+Three editor-style toggles inside the search input shape how the query
+matches, for the browser-side search and the server-side find alike: **Aa**
+match case (on by default), **.\*** regular expression (on by default; off
+searches the literal text, no regexp syntax), and **!** invert (keep the lines
+that do *not* match, like `grep -v` — inverted hits highlight as whole lines,
+since there is no matched text to mark). The **☰ menu** at the toolbar's right
+holds the remaining settings — **wrap lines**, **find in archives** (find also
+searches rotated archives) and **live view** (a view keeps following its file
+after the backlog loads; off reads it once) — plus the running version,
+linking to the releases page. All toggles and settings persist in the browser
+(localStorage).
 
 To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a
@@ -114,8 +140,8 @@ Rotated and compressed logs are handled the way you'd want: files that are no
 longer written to (`.gz`, `.bz2`, `.xz`, `.zst`, numeric `.1`, date-stamped
 `-YYYYMMDD`, `.old`, `.bak`) are listed as *archived* but excluded from live
 tailing, so compressed bytes never pollute the stream. Selecting one views it
-with the compression decoded transparently, and the **find (incl. arch.)** mode
-searches live files *and* every archive together.
+with the compression decoded transparently, and with **find in archives**
+enabled (☰ menu) find searches live files *and* every archive together.
 
 Tailing is push-based on Linux: appended lines reach the browser in
 milliseconds via **inotify** (through the standard library's `syscall` package
@@ -139,19 +165,23 @@ the server reads the whole file (that is what the bar tracks) but sends only
 the last 50,000 lines, so viewing a huge archive doesn't push millions of
 lines over the wire that the scrollback would discard anyway. While a load
 streams in, the view holds still instead of chasing the bottom, then jumps to
-the end once at EOF — unless you already started scrolling. The toolbar's
-top-right corner shows the **running version**, linking to the releases page.
+the end once at EOF — unless you already started scrolling.
 
 The web UI's file selector includes an **All files** entry (selected by default)
-that streams every served file at once, each line prefixed by its file (click
-the prefix to jump into that file's view — scrolled to, and highlighting, that
-very line) and the streams **merged in timestamp order**. Several common formats are recognized at
+that streams every served file at once, each line prefixed by its file — the
+prefix carries a stable, muted **per-file color**, so interleaved sources are
+told apart at a glance, and clicking it jumps into that file's view, scrolled
+to and highlighting that very line — and the streams **merged in timestamp
+order**. Several common formats are recognized at
 (or near) the start of each line — ISO 8601 / RFC 3339, `YYYY-MM-DD HH:MM:SS`,
-slash-separated dates, Apache/CLF, Unix `ctime` and syslog (RFC 3164). The format
-is detected per file from its first lines (not guessed from a single one), and a
-line without a recognizable timestamp keeps its file's previous one, so
-multi-line entries stay together. Handy when you're watching logs from many
-hosts together.
+slash-separated dates, Apache/CLF, Unix `ctime` and syslog (RFC 3164). The
+format is detected per file from its trailing lines (not guessed from a single
+one), and a line without a recognizable timestamp keeps its file's previous
+one, so multi-line entries stay together — even when the backlog *starts*
+mid-entry, the previous date is found by looking further back in the file. A
+line with no date anywhere sorts by arrival time; timestamps only order the
+merge and are never added to the display. Handy when you're watching logs from
+many hosts together.
 
 Lines are interactive: hovering highlights the line under the cursor, and
 clicking selects it — **Ctrl+click** toggles lines individually, **Shift+click**
@@ -196,8 +226,9 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments or comma-separated.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing. The web UI's "find (incl. arch.)" mode also
-searches them, decompressed transparently, and viewing one shows it decoded.
+but excluded from live tailing. With "find in archives" enabled (web UI, in the
+menu) find also searches them, decompressed transparently, and viewing one
+shows it decoded.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.
@@ -232,10 +263,10 @@ can't be rendered as script in your browser.
 
 ### Frontend
 
-The frontend is plain, framework-free HTML, CSS and JavaScript: four flat files
-in `frontend/` (two Go templates, `main.css`, `main.js`), embedded into the
-binary at compile time with `//go:embed` (see `frontend.go`). The favicon is an
-inline SVG data URI in `base.html` — no image files at all. There is no build
+The frontend is plain, framework-free HTML, CSS and JavaScript: three flat files
+in `frontend/` (one Go template `tailon.html`, `main.css`, `main.js`), embedded
+into the binary at compile time with `//go:embed` (see `frontend.go`). The
+favicon is an inline SVG data URI in `tailon.html` — no image files at all. There is no build
 step or toolchain — edit the files directly and rebuild the binary. The UI
 talks to the backend over Server-Sent Events.
 

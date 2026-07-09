@@ -24,8 +24,8 @@ func setupRoutes(relativeroot string) *http.ServeMux {
 	router := http.NewServeMux()
 
 	// Serve the embedded frontend assets (see frontend.go). Only the two real
-	// web assets are exposed: the Go templates living beside them are
-	// server-side input, and there is no directory to browse.
+	// web assets are exposed: the Go template living beside them is server-side
+	// input, and there is no directory to browse.
 	staticHandler := noCacheControl(http.FileServerFS(frontendAssets))
 	staticHandler = http.StripPrefix(relativeroot+"vfs/", staticHandler)
 
@@ -63,16 +63,16 @@ func setupServer(config *Config, addr string, logger *log.Logger) *http.Server {
 	return &server
 }
 
-// indexTemplate is parsed once at startup — the templates are embedded in the
-// binary, so they cannot change while the process runs.
-var indexTemplate = template.Must(template.ParseFS(frontendAssets, "base.html", "tailon.html"))
+// indexTemplate is parsed once at startup — the template is embedded in the
+// binary, so it cannot change while the process runs.
+var indexTemplate = template.Must(template.ParseFS(frontendAssets, "tailon.html"))
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	indexTemplate.Execute(w, config)
 }
 
 // listHandler returns the current file listing as JSON. The frontend fetches it
-// to populate the file selector. This replaces the SockJS "list" message.
+// to populate the file selector.
 func listHandler(w http.ResponseWriter, r *http.Request) {
 	listing := createListing(config.Sources)
 	w.Header().Set("Content-Type", "application/json")
@@ -129,9 +129,9 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 
 func (r *responseRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// loggingHandler logs each request in Apache Common Log Format. It replaces
-// github.com/gorilla/handlers; streaming keeps working because the SSE handler
-// flushes through http.ResponseController, which unwraps to the real writer.
+// loggingHandler logs each request in Apache Common Log Format. Streaming keeps
+// working because the SSE handler flushes through http.ResponseController,
+// which unwraps responseRecorder to reach the real writer.
 func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -148,12 +148,13 @@ func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 	})
 }
 
-// findMaxMatches and findCtxLines bound a search: the first N matches per
-// file, each with C lines of context. The bound is why find stays fast on huge
-// logs — most scans stop long before the end of the file, and the response is
-// small no matter how large the input. Find is a scent trail, not the full
-// hunt: to see more than the first matches, open the file's view and step
-// through the highlights there.
+// findMaxMatches and findCtxLines are the default bounds of a search: the
+// first N matches per file, each with C lines of context. The UI adjusts both
+// per request (max ≤ 100, ctx ≤ 10 — see findHandler), but a bound always
+// stands, and that is why find stays fast on huge logs — most scans stop long
+// before the end of the file, and the response is small no matter how large
+// the input. Find is a scent trail, not the full hunt: to see more than the
+// first matches, open the file's view and step through the highlights there.
 const (
 	findMaxMatches = 3
 	findCtxLines   = 3
@@ -175,18 +176,30 @@ type findResult struct {
 // findHandler searches the selected files server-side and returns JSON — the
 // fast alternative to streaming whole files to the browser. Query parameters:
 // q (RE2 regexp), then path / all=1 / scope as in /stream; stale=1 also
-// searches rotated archives (decoded transparently).
+// searches rotated archives (decoded transparently). The UI's search toggles
+// arrive as literal=1 (match q as literal text, no regexp syntax), nocase=1
+// (ignore case) and invert=1 (return the lines that do NOT match, grep -v);
+// max and ctx (both bounded) adjust how many matches per file are returned
+// and how many context lines surround each.
 func findHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	if query.Get("q") == "" {
+	q := query.Get("q")
+	if q == "" {
 		http.Error(w, "empty search", http.StatusBadRequest)
 		return
 	}
-	re, err := regexp.Compile(query.Get("q"))
+	if query.Get("literal") == "1" {
+		q = regexp.QuoteMeta(q)
+	}
+	if query.Get("nocase") == "1" {
+		q = "(?i)" + q
+	}
+	re, err := regexp.Compile(q)
 	if err != nil {
 		http.Error(w, "invalid search: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	invert := query.Get("invert") == "1"
 
 	var paths []string
 	if query.Get("all") == "1" {
@@ -228,9 +241,9 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	// the view's "N in file" counter, where the browser highlights only the
 	// lines it holds but the total must cover the entire file.
 	counting := query.Get("count") == "1"
-	// max raises the per-file excerpt cap (bounded): the view's "continue
-	// search" lists up to 100 matches of a single file instead of the default
-	// scent-trail few.
+	// max adjusts the per-file excerpt cap (bounded): the UI's matches-per-file
+	// select, and the view's "continue search", which lists up to 100 matches
+	// of a single file instead of the default scent-trail few.
 	maxMatches := findMaxMatches
 	if v := query.Get("max"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -238,6 +251,17 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 				n = 100
 			}
 			maxMatches = n
+		}
+	}
+	// ctx adjusts how many lines of context surround each match (0 = just the
+	// matching lines), bounded like max.
+	ctxLines := findCtxLines
+	if v := query.Get("ctx"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			if n > 10 {
+				n = 10
+			}
+			ctxLines = n
 		}
 	}
 	matches := make([][]findMatch, len(paths))
@@ -249,9 +273,9 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 		go func(i int, p string) {
 			defer wg.Done()
 			if counting {
-				counts[i] = countInFile(r.Context(), p, re, &read[i])
+				counts[i] = countInFile(r.Context(), p, re, invert, &read[i])
 			} else {
-				matches[i] = findInFile(r.Context(), p, re, &read[i], maxMatches)
+				matches[i] = findInFile(r.Context(), p, re, invert, &read[i], maxMatches, ctxLines)
 			}
 		}(i, p)
 	}
@@ -310,9 +334,6 @@ progress:
 	}{results})
 }
 
-// countInFile returns how many lines match re — the whole file, uncapped
-// (unlike findInFile there is no early exit; a count must cover everything).
-
 // atomicCounter counts bytes read through it, safe to read from the progress
 // ticker while a scan goroutine advances it (unlike tailer.go's countingReader,
 // which stays within one goroutine).
@@ -327,11 +348,6 @@ func (c atomicCounter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// findInFile returns the first findMaxMatches hits in the file (decoded if
-// compressed), each with up to findCtxLines lines of context on both sides. It
-// reads line-buffered and returns as soon as the last hit's after-context is
-// complete, so a scan rarely reads the whole file. A cancelled request (the
-// client navigated away) stops the scan instead of running it to the end.
 // scanLines reads path line by line — decoded if compressed, with consumed
 // on-disk bytes counted into nRead for progress — and calls fn per line until
 // fn returns false, the file ends, or the request is cancelled (the client
@@ -368,31 +384,37 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 	}
 }
 
-// findInFile returns the first maxMatches hits in the file, each with up to
-// findCtxLines lines of context on both sides, stopping as soon as the last
-// hit's after-context is complete — a scan rarely reads the whole file.
-func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64, maxMatches int) []findMatch {
-	var ring []string // the last findCtxLines lines, before-context for the next hit
+// findInFile returns the first maxMatches hits in the file (with invert, the
+// lines that do NOT match), each with up to ctxLines lines of context on
+// both sides, stopping as soon as the last hit's after-context is complete —
+// a scan rarely reads the whole file. A hit inside a previous hit's
+// after-context merges into that excerpt instead of starting its own.
+func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool, nRead *int64, maxMatches, ctxLines int) []findMatch {
+	var ring []string // the last ctxLines lines, before-context for the next hit
 	var hits []findMatch
 	scanLines(ctx, path, nRead, func(line string) bool {
-		// Every line first serves as after-context for the open hits (a
-		// matching line inside another's context included, like grep -C).
+		// Every line first serves as after-context for the open hits. A
+		// matching line consumed that way is already shown (the client
+		// highlights matches wherever they appear, context included), so it
+		// does not open an excerpt of its own — that would render it twice.
 		complete := true
+		shown := false
 		for i := range hits {
-			if len(hits[i].After) < findCtxLines {
+			if len(hits[i].After) < ctxLines {
 				hits[i].After = append(hits[i].After, line)
-				complete = complete && len(hits[i].After) == findCtxLines
+				complete = complete && len(hits[i].After) == ctxLines
+				shown = true
 			}
 		}
-		if len(hits) < maxMatches && re.MatchString(line) {
+		if !shown && len(hits) < maxMatches && re.MatchString(line) != invert {
 			hits = append(hits, findMatch{
 				Before: append([]string{}, ring...),
 				Text:   line,
 				After:  []string{},
 			})
-			complete = false
+			complete = ctxLines == 0 // with context, wait for this hit's after-lines
 		}
-		if ring = append(ring, line); len(ring) > findCtxLines {
+		if ring = append(ring, line); len(ring) > ctxLines {
 			ring = ring[1:]
 		}
 		return len(hits) < maxMatches || !complete // done: cap reached, contexts full
@@ -400,12 +422,13 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int6
 	return hits
 }
 
-// countInFile returns how many lines match re — the whole file, uncapped
-// (unlike findInFile there is no early exit; a count must cover everything).
-func countInFile(ctx context.Context, path string, re *regexp.Regexp, nRead *int64) int64 {
+// countInFile returns how many lines match re (with invert, how many do NOT)
+// — the whole file, uncapped (unlike findInFile there is no early exit; a
+// count must cover everything).
+func countInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool, nRead *int64) int64 {
 	var n int64
 	scanLines(ctx, path, nRead, func(line string) bool {
-		if re.MatchString(line) {
+		if re.MatchString(line) != invert {
 			n++
 		}
 		return true
@@ -699,15 +722,17 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Per-file timestamp detection (see timestamper in tailer.go): the format is
-	// detected from each file's first lines and then reused; a line with no
-	// timestamp inherits its file's previous one, so multi-line entries stay
-	// together.
+	// Per-file timestamp detection (see timestamper in tailer.go): each file's
+	// stamper is primed from the file itself — the format from its trailing
+	// lines, and the last date before the backlog window, so a backlog that
+	// starts mid-entry (undated continuation lines) still inherits its entry's
+	// date instead of sorting as "now". A line with no timestamp inherits its
+	// file's previous one, so multi-line entries stay together.
 	stampers := make(map[string]*timestamper)
 	timestamp := func(ln logLine) time.Time {
 		t := stampers[ln.path]
 		if t == nil {
-			t = &timestamper{}
+			t = primeTimestamper(ln.path, nlines)
 			stampers[ln.path] = t
 		}
 		return t.stamp(ln.text)

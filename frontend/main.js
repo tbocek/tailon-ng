@@ -11,28 +11,77 @@ const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "
 const DEMO = typeof window !== "undefined" && window.DEMO === true;
 // "tail" follows live files; "find" searches the selection server-side for
 // the first matches per file with context — bounded and fast on any file
-// size; "find-all" (shown as "find (incl. arch.)") also searches rotated
-// archives (.gz, .1, …), decoded server-side. "view" (wire value "grep") shows a whole file: it is also what
-// clicking a find result or a line's file prefix opens. In tail and view the
-// input is a browser-side search that highlights matches as you type without
-// hiding lines (see searchApply). View works on single files only — for a
-// group, a dump of several files interleaved is not useful, so the option is
-// disabled (see syncModeOptions).
+// size (the ☰ menu's "find in archives" widens it to rotated archives —
+// .gz, .1, … — decoded server-side). "view" (wire value "grep") shows a
+// whole file: it is also what clicking a find result or a line's file prefix
+// opens. In tail and view the input is a browser-side search that highlights
+// matches as you type without hiding lines (see searchApply). View works on
+// single files only — for a group, a dump of several files interleaved is
+// not useful, so the option is disabled (see syncModeOptions).
 const MODES = [
     { value: "tail", label: "tail" },
-    { value: "find", label: "find (excl. arch.)" },
-    { value: "find-all", label: "find (incl. arch.)" },
+    { value: "find", label: "find" },
     { value: "grep", label: "view" },
 ];
 const TAIL_LINES = 10; // trailing lines shown when a tail starts
 const MAX_LINES = 50000; // scrollback cap: lines kept here, and the most a view requests
-const FIND_MAX = 3; // matches per file a find returns (findMaxMatches server-side)
+// The find-shape choices, each a small select shown in find mode: matches per
+// file (group searches only — a single-file find always lists everything, up
+// to the server cap of 100, which is also what "all" means) and the context
+// lines around each match.
+const FIND_MATCHES = [1, 3, 5, 10, 25, 100];
+const FIND_CTX = [0, 1, 2, 3, 5, 10];
 
 const state = {
-    files: [], file: null, mode: "tail", filter: "", wrap: false,
+    files: [], file: null, mode: "tail", filter: "",
     source: null,
     prefix: "", // directory prefix shared by every served file, hidden in the UI
 };
+
+// User settings, persisted in localStorage. The search toggles inside the
+// input (VS Code-style) shape how the query matches — regex off searches the
+// literal text, caseSense off ignores case, invert keeps the lines that do
+// NOT match — and apply to the browser-side search and the server-side find
+// alike. findMatches/findCtx shape a find's results (see FIND_MATCHES). The
+// ☰ menu holds the rest: wrap (line wrapping), archives (find also searches
+// rotated archives) and live (a view keeps following the file after its
+// backlog; off reads it once).
+const SETTINGS_KEY = "tailon-settings";
+const settings = {
+    regex: true, caseSense: true, invert: false,
+    findMatches: 3, findCtx: 3,
+    wrap: false, archives: false, live: true,
+};
+try { // no localStorage (or corrupt content): the defaults stand
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+    for (const k in settings) if (typeof saved[k] === typeof settings[k]) settings[k] = saved[k];
+} catch (e) { }
+if (FIND_MATCHES.indexOf(settings.findMatches) < 0) settings.findMatches = 3;
+if (FIND_CTX.indexOf(settings.findCtx) < 0) settings.findCtx = 3;
+function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { }
+}
+
+// buildRegex compiles the query per the search toggles: with regex off the
+// text is escaped and matched literally, with caseSense off the "i" flag is
+// added. Returns null for an empty query or (while typing) an invalid
+// regexp. Invert is not part of the regex — it negates the test wherever
+// lines are matched (see searchLine).
+function buildRegex() {
+    if (!state.filter) return null;
+    const q = settings.regex ? state.filter : state.filter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try { return new RegExp(q, settings.caseSense ? "g" : "gi"); } catch (e) { return null; }
+}
+
+// searchParams adds the toggles to a find/count request, where the server
+// mirrors them: literal disables regex syntax, nocase ignores case, invert
+// returns the lines that do not match.
+function searchParams(p) {
+    if (!settings.regex) p.set("literal", "1");
+    if (!settings.caseSense) p.set("nocase", "1");
+    if (settings.invert) p.set("invert", "1");
+    return p;
+}
 
 // Served files are append-only, so lines fetched once stay valid: single-file
 // streams are cached per (file, mode) along with the byte offset read so far,
@@ -58,8 +107,26 @@ function cacheEntry() {
 const el = {};
 [
     "file-select", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
-    "cfg-wrap", "action-download", "status", "scrollable", "logview", "toast", "loading",
+    "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
+    "menu-toggle", "menu", "cfg-wrap", "cfg-archives", "cfg-live",
+    "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(function (id) { el[id] = document.getElementById(id); });
+
+// In merged streams each file's clickable "file:" prefix gets a muted color,
+// telling interleaved files apart at a glance without making the lines
+// themselves loud. Colors are handed out round-robin on first appearance —
+// unlike a path hash, the first few files can never collide — and stay fixed
+// for the session. The palette is the theme's ANSI colors.
+const FILE_COLORS = ["#cc6666", "#de935f", "#f0c674", "#b5bd68", "#8abeb7", "#81a2be", "#b294bb"];
+const fileColors = new Map(); // path -> assigned palette color
+function fileColor(path) {
+    let c = fileColors.get(path);
+    if (!c) {
+        c = FILE_COLORS[fileColors.size % FILE_COLORS.length];
+        fileColors.set(path, c);
+    }
+    return c;
+}
 
 // Line selection: clicking a line highlights it (clicking again clears it),
 // ctrl+click toggles lines individually, shift+click selects the range from the
@@ -222,6 +289,8 @@ const logview = {
                 link.textContent = stripPrefix(ln.path);
                 link.title = "view " + ln.path;
                 link.dataset.path = ln.path;
+                // A custom property, not color: the hover accent must still win.
+                link.style.setProperty("--fc", fileColor(ln.path));
                 span.appendChild(link);
                 span.appendChild(document.createTextNode(": "));
             }
@@ -274,6 +343,30 @@ function setLoading(on, holdView) {
     if (on) logview.userScrolled = false;
 }
 
+// The one text input is the query in find mode (the button runs it) and a
+// browser-side search everywhere else, highlighting matches as you type
+// without hiding anything (see searchApply) with ▲▼ steppers. Make the split
+// visible: search is browser-side over the shown lines, find is a
+// server-side scan of the whole files on disk. In view the counter bridges
+// the two — it shows the whole-file total and clicking it continues the
+// search on the server. Re-run on every reconnect and on the regex toggle,
+// which changes the placeholder.
+function updateFilterHints() {
+    const finding = state.mode === "find";
+    const rx = settings.regex ? " (regexp)" : "";
+    el["filter-input"].placeholder = (finding ? "find in files" : "search shown lines") + rx;
+    el["filter-input"].title = finding
+        ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
+        : "Browser-side: searches the lines loaded in this view" +
+        (state.mode === "grep" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
+    el["filter-apply"].hidden = !finding;
+    el["search-prev"].hidden = el["search-next"].hidden = finding;
+    // The find-shape selects appear only in find mode; matches-per-file only
+    // for group searches (a single-file find always lists all matches).
+    el["find-matches"].hidden = !finding || !state.file || !state.file.all;
+    el["find-ctx"].hidden = !finding;
+}
+
 // connect (re)opens the stream for the current file and mode. locate, when
 // given, is the text of a line to select and center once rendered (set after
 // the clear, which resets it — and before the cache replay, which may already
@@ -287,21 +380,8 @@ function connect(locate) {
     setLoading(false);
     setStatus("");
 
-    // The one text input is the query in the find modes (the button runs it)
-    // and a browser-side search everywhere else, highlighting matches as you
-    // type without hiding anything (see searchApply) with ▲▼ steppers.
-    // Make the split visible: search is browser-side over the shown lines,
-    // find is a server-side scan of the whole files on disk. In view the
-    // counter bridges the two — it shows the whole-file total and clicking it
-    // continues the search on the server.
-    const finding = state.mode.indexOf("find") === 0;
-    el["filter-input"].placeholder = finding ? "find in files (regexp)" : "search shown lines (regexp)";
-    el["filter-input"].title = finding
-        ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
-        : "Browser-side: searches the lines loaded in this view" +
-        (state.mode === "grep" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
-    el["filter-apply"].hidden = !finding;
-    el["search-prev"].hidden = el["search-next"].hidden = finding;
+    const finding = state.mode === "find";
+    updateFilterHints();
 
     // A dropped file lives in the browser: render it straight from memory —
     // no server involved (and in demo mode there is no server at all).
@@ -349,8 +429,9 @@ function connect(locate) {
         // A live single file in view mode loads its backlog and then keeps
         // following — new lines simply append, and the server reads only the
         // appended bytes from there on (files are append-only). Archives stay
-        // a read-once (they never grow, and EOF marks their cache complete).
-        if (state.mode === "grep" && !state.file.stale) p.set("mode", "tail");
+        // a read-once (they never grow, and EOF marks their cache complete),
+        // and so does a view with the ☰ menu's "live view" turned off.
+        if (state.mode === "grep" && !state.file.stale && settings.live) p.set("mode", "tail");
     }
 
     setStatus("connecting…");
@@ -408,16 +489,17 @@ function connect(locate) {
 // render them. findSeq guards against a stale response arriving after the user
 // already switched to another view.
 let findSeq = 0;
-let findMaxUsed = FIND_MAX; // the per-file cap the last find asked for
+let findMaxUsed = settings.findMatches; // the per-file cap the last find asked for
 async function findRequest() {
     const seq = ++findSeq;
-    if (!state.filter) { setStatus("enter a search (regexp)"); return; }
+    if (!state.filter) { setStatus("enter a search"); return; }
     setLoading(true);
     const p = new URLSearchParams({ q: state.filter });
     if (state.file.all) {
         p.set("all", "1");
         if (state.file.scope) p.set("scope", state.file.scope);
-        findMaxUsed = FIND_MAX;
+        p.set("max", String(settings.findMatches));
+        findMaxUsed = settings.findMatches;
     } else {
         // A single file is the "continue search" target: list up to 100
         // matches instead of the multi-file scent-trail few.
@@ -425,7 +507,9 @@ async function findRequest() {
         p.set("max", "100");
         findMaxUsed = 100;
     }
-    if (state.mode === "find-all") p.set("stale", "1");
+    p.set("ctx", String(settings.findCtx));
+    if (settings.archives) p.set("stale", "1"); // the ☰ menu's "find in archives"
+    searchParams(p);
 
     let results = null;
     try {
@@ -472,8 +556,9 @@ async function findRequest() {
 function renderFind(results) {
     logview.clear();
     if (!results.length) { setStatus("no matches"); return; }
-    let re = null; // the server validated the query; guard anyway
-    try { re = new RegExp(state.filter, "g"); } catch (e) { }
+    // Inverted results have no matched substring to <mark> — the lines shown
+    // are exactly the ones the query does not match.
+    const re = settings.invert ? null : buildRegex();
     const frag = document.createDocumentFragment();
     const addLine = function (text, cls) {
         const span = document.createElement("span");
@@ -527,7 +612,10 @@ function commonPrefix(paths) {
 // highlighted in place — nothing is ever hidden — with the matched text
 // wrapped in a <mark>. Enter / the ▲▼ buttons step through the matching
 // lines; clearing the input clears the highlights. In tail, lines streaming
-// in are matched as they render (see logview.flush).
+// in are matched as they render (see logview.flush). The search sees only
+// each line's file content (contentText) — the clickable "file: " prefix of
+// merged streams is chrome, and matching text the file does not contain
+// would disagree with the server-side find.
 //
 // The pass over the scrollback runs in ~12ms slices (setTimeout between
 // them), so a large buffer never blocks typing; a keystroke bumps search.gen,
@@ -552,7 +640,7 @@ function scheduleFileCount() {
     countTimer = setTimeout(async function () {
         let total = null;
         try {
-            const p = new URLSearchParams({ q: q, count: "1", path: path });
+            const p = searchParams(new URLSearchParams({ q: q, count: "1", path: path }));
             const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString());
             if (!resp.ok) return;
             // NDJSON: skip the progress lines, take the counts line.
@@ -616,6 +704,17 @@ function unmark(entry) {
     entry.normalize();
 }
 
+// contentText is the text the search sees for one rendered line: the file's
+// own content, without the "file: " prefix multi-file streams prepend. The
+// prefix is UI chrome, not file text — the server-side find and counter
+// never see it, and the browser search must match the same thing.
+function contentText(entry) {
+    const link = entry.firstChild;
+    return link && link.nodeType === 1 && link.classList.contains("path-link")
+        ? entry.textContent.slice(link.textContent.length + 2)
+        : entry.textContent;
+}
+
 // markText wraps every match of re inside entry's text in a <mark>. Matching
 // is per text node (ANSI styling splits a line into several), so a match
 // spanning two differently-styled runs stays unmarked — rare, and the line
@@ -625,6 +724,11 @@ function markText(entry, re) {
     const nodes = [];
     for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
     for (const node of nodes) {
+        // Like contentText: never mark inside the path link or its ": "
+        // separator — the prefix is not part of the line's content.
+        const prev = node.previousSibling;
+        if (node.parentNode.closest(".path-link") ||
+            (prev && prev.nodeType === 1 && prev.classList.contains("path-link"))) continue;
         const text = node.nodeValue;
         let m, last = 0, frag = null;
         re.lastIndex = 0;
@@ -645,13 +749,15 @@ function markText(entry, re) {
 }
 
 // searchLine tests one rendered line and highlights it if it matches the
-// active query. Already-highlighted lines are skipped, so calling it twice on
-// a line (live pass racing the scrollback trim) is harmless.
+// active query (with invert on: if it does not). Already-highlighted lines
+// are skipped, so calling it twice on a line (live pass racing the
+// scrollback trim) is harmless. Inverted hits get the line highlight but no
+// <mark>s — there is no matched text to mark.
 function searchLine(entry, re) {
     if (entry.classList.contains("hit")) return;
     re.lastIndex = 0;
-    if (!re.test(entry.textContent)) return;
-    markText(entry, re);
+    if (re.test(contentText(entry)) === settings.invert) return;
+    if (!settings.invert) markText(entry, re);
     entry.classList.add("hit");
     search.hits.push(entry);
 }
@@ -669,9 +775,8 @@ function searchApply(done) {
     search.cur = -1;
     search.applied = null;
     search.re = null;
-    if (searchableMode() && state.filter) {
-        let re = null;
-        try { re = new RegExp(state.filter, "g"); } catch (e) { /* incomplete regexp while typing */ }
+    if (searchableMode()) {
+        const re = buildRegex(); // null: empty, or incomplete regexp while typing
         if (re) {
             search.applied = state.filter;
             search.re = re;
@@ -783,10 +888,9 @@ function syncModeOptions() {
     // merge with a per-file last-lines backlog.
     const single = state.file && !group;
     el["mode-select"].options[0].disabled = !!single; // options[0] is "tail"
-    el["mode-select"].options[1].disabled = !!local || DEMO; // "find" and "find-all" are
-    el["mode-select"].options[2].disabled = !!local || DEMO; // server-side — use the search box
-    el["mode-select"].options[3].disabled = !!group; // options[3] is "view"
-    if (DEMO && state.mode.indexOf("find") === 0) state.mode = "grep";
+    el["mode-select"].options[1].disabled = !!local || DEMO; // "find" is server-side — use the search box
+    el["mode-select"].options[2].disabled = !!group; // options[2] is "view"
+    if (DEMO && state.mode === "find") state.mode = "grep";
     if (local) state.mode = "grep";
     if (single && state.mode === "tail") state.mode = "grep";
     if (group && state.mode === "grep") state.mode = "tail";
@@ -1009,10 +1113,7 @@ function init() {
     el["scrollable"].addEventListener("click", function (e) {
         const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey;
         if (plain && e.target.classList.contains("path-link")) {
-            const entry = e.target.parentNode;
-            // The raw line text follows the "prefix: " nodes.
-            const text = entry.textContent.slice(e.target.textContent.length + 2);
-            jumpToFile(e.target.dataset.path, text);
+            jumpToFile(e.target.dataset.path, contentText(e.target.parentNode));
             return;
         }
         const head = plain && e.target.closest(".find-file");
@@ -1071,6 +1172,7 @@ function init() {
     // in an input. Escape clears the selection.
     document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") {
+            if (!el["menu"].hidden) { el["menu"].hidden = true; return; }
             for (const s of el["logview"].querySelectorAll(".log-entry.selected")) {
                 s.classList.remove("selected");
             }
@@ -1098,8 +1200,67 @@ function init() {
         connect();
     };
 
-    el["cfg-wrap"].checked = state.wrap;
-    el["cfg-wrap"].onchange = function () { state.wrap = el["cfg-wrap"].checked; el["logview"].classList.toggle("wrap", state.wrap); };
+    // The search toggles inside the input: flipping one re-runs the search
+    // right away — and the find too when results are showing (the toggle is
+    // as deliberate as the button). Focus returns to the input, like an
+    // editor's find widget.
+    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"]].forEach(function (t) {
+        const btn = el[t[0]], key = t[1];
+        btn.classList.toggle("on", settings[key]);
+        btn.onclick = function () {
+            settings[key] = !settings[key];
+            btn.classList.toggle("on", settings[key]);
+            saveSettings();
+            updateFilterHints(); // the placeholder's "(regexp)" follows the toggle
+            el["filter-input"].focus();
+            if (searchableMode()) searchApply();
+            else if (state.filter) applyFilter();
+        };
+    });
+
+    // The find-shape selects: matches per file for group finds ("all" is the
+    // server cap of 100 — a single-file find always uses that) and the
+    // context lines around each match. Changing one re-runs a shown find.
+    FIND_MATCHES.forEach(function (n) { el["find-matches"].add(new Option(n === 100 ? "all (100)" : String(n), String(n))); });
+    FIND_CTX.forEach(function (n) { el["find-ctx"].add(new Option("±" + n, String(n))); });
+    el["find-matches"].value = String(settings.findMatches);
+    el["find-ctx"].value = String(settings.findCtx);
+    el["find-matches"].onchange = el["find-ctx"].onchange = function () {
+        settings.findMatches = Number(el["find-matches"].value);
+        settings.findCtx = Number(el["find-ctx"].value);
+        saveSettings();
+        if (state.mode === "find" && state.filter) connect();
+    };
+
+    // ☰ settings menu: the button toggles it; a click anywhere else or
+    // Escape closes it (this click listener sees the opening click too — the
+    // closest() checks keep it from closing the menu it just opened).
+    el["menu-toggle"].onclick = function () { el["menu"].hidden = !el["menu"].hidden; };
+    document.addEventListener("click", function (e) {
+        if (!el["menu"].hidden && !e.target.closest("#menu") && !e.target.closest("#menu-toggle")) {
+            el["menu"].hidden = true;
+        }
+    });
+
+    el["cfg-wrap"].checked = settings.wrap;
+    el["logview"].classList.toggle("wrap", settings.wrap);
+    el["cfg-wrap"].onchange = function () {
+        settings.wrap = el["cfg-wrap"].checked;
+        saveSettings();
+        el["logview"].classList.toggle("wrap", settings.wrap);
+    };
+    el["cfg-archives"].checked = settings.archives;
+    el["cfg-archives"].onchange = function () {
+        settings.archives = el["cfg-archives"].checked;
+        saveSettings();
+        if (state.mode === "find" && state.filter) connect(); // re-run the shown find
+    };
+    el["cfg-live"].checked = settings.live;
+    el["cfg-live"].onchange = function () {
+        settings.live = el["cfg-live"].checked;
+        saveSettings();
+        if (state.mode === "grep") connect(); // reconnect: follow, or stop following
+    };
 
     refreshFiles().then(function () { updateDownload(); connect(); });
 }

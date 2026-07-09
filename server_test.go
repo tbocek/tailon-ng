@@ -408,7 +408,7 @@ func TestAggregateTailSkipsArchives(t *testing.T) {
 }
 
 // TestStreamRejectsAggregateView checks that view (grep) is limited to single
-// files: an aggregate view — and the removed grep-all mode — are rejected.
+// files: an aggregate view is rejected (400), as is any unknown mode.
 func TestStreamRejectsAggregateView(t *testing.T) {
 	setupConfig(t, "testdata/ex1/var/log/")
 	for _, q := range []string{"mode=grep&all=1", "mode=grep&all=1&scope=testdata/ex1/var/", "mode=grep-all&all=1"} {
@@ -683,13 +683,30 @@ func TestFindHandler(t *testing.T) {
 	}
 
 	// max raises the cap (the view's "continue search"), clamped to 100.
-	res = get("q=.&max=100&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	// ctx=0 keeps every matching line its own excerpt (with context they
+	// would merge into every-4th-line excerpts).
+	res = get("q=.&max=100&ctx=0&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
 	if len(res[0].Matches) != 40 { // every line of a.log matches
 		t.Fatalf("max: got %d matches, want 40", len(res[0].Matches))
 	}
-	res = get("q=.&max=9999&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	res = get("q=.&max=9999&ctx=0&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
 	if len(res[0].Matches) != 40 {
 		t.Fatalf("max clamp: got %d matches", len(res[0].Matches))
+	}
+
+	// ctx adjusts the context lines around each match: 0 means just the
+	// matching lines, and the bound (10) caps oversized requests.
+	res = get("q=needle&all=1&ctx=1")
+	if m := res[0].Matches[0]; len(m.Before) != 1 || len(m.After) != 1 {
+		t.Fatalf("ctx=1: before=%d after=%d", len(m.Before), len(m.After))
+	}
+	res = get("q=needle&all=1&ctx=0")
+	if m := res[0].Matches[0]; len(m.Before) != 0 || len(m.After) != 0 {
+		t.Fatalf("ctx=0: before=%d after=%d", len(m.Before), len(m.After))
+	}
+	res = get("q=needle&all=1&ctx=9999")
+	if m := res[0].Matches[0]; len(m.Before) != 10 || len(m.After) != 10 {
+		t.Fatalf("ctx clamp: before=%d after=%d", len(m.Before), len(m.After))
 	}
 
 	// count=1 returns whole-file totals, past the excerpt cap (backs the
@@ -702,6 +719,60 @@ func TestFindHandler(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(string(body), `"counts":[{"path":`) || !strings.Contains(string(body), `"n":2}`) {
 		t.Fatalf("count mode: unexpected response:\n%s", body)
+	}
+
+	// The search toggles: literal=1 matches the query as plain text (regexp
+	// syntax neutralized — "(" is a valid literal search), nocase=1 ignores
+	// case, invert=1 returns the lines that do NOT match (grep -v).
+	res = get("q=needle.here&all=1") // as a regexp the "." matches the space
+	if len(res) != 1 || len(res[0].Matches) != 2 {
+		t.Fatalf("regexp dot: %+v", res)
+	}
+	if res = get("q=needle.here&all=1&literal=1"); len(res) != 0 {
+		t.Fatalf("literal must not treat '.' as a wildcard: %+v", res)
+	}
+	if res = get("q=%28&all=1&literal=1"); len(res) != 0 {
+		t.Fatalf("literal '(': %+v", res)
+	}
+	if res = get("q=NEEDLE&all=1"); len(res) != 0 {
+		t.Fatalf("case-sensitive by default: %+v", res)
+	}
+	res = get("q=NEEDLE&all=1&nocase=1")
+	if len(res) != 1 || len(res[0].Matches) != 2 {
+		t.Fatalf("nocase: %+v", res)
+	}
+	res = get("q=filler&invert=1&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	if len(res) != 1 || len(res[0].Matches) != 2 || res[0].Matches[0].Text != "needle here" {
+		t.Fatalf("invert: %+v", res)
+	}
+	resp, err = http.Get(srv.URL + "?q=filler&count=1&invert=1&path=" + url.QueryEscape(filepath.Join(dir, "a.log")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"n":2}`) {
+		t.Fatalf("inverted count: unexpected response:\n%s", body)
+	}
+
+	// A match inside a previous match's after-context merges into that
+	// excerpt (it is already shown there, highlighted) instead of repeating
+	// as its own; with ctx=0 there is no context to merge into, so close
+	// matches stay separate excerpts. Last: the added file changes what the
+	// all=1 queries above would see.
+	cl := filepath.Join(dir, "cluster.log")
+	os.WriteFile(cl, []byte("x\nneedle one\nneedle two\ny\nz\nw\nneedle three\nv\n"), 0o644)
+	createListing(config.Sources) // pick up the file added after the initial listing
+	res = get("q=needle&ctx=2&path=" + url.QueryEscape(cl))
+	if len(res[0].Matches) != 2 {
+		t.Fatalf("cluster: got %d excerpts, want 2 (one merged, one separate): %+v", len(res[0].Matches), res[0].Matches)
+	}
+	if m := res[0].Matches[0]; m.Text != "needle one" || len(m.After) != 2 || m.After[0] != "needle two" {
+		t.Fatalf("cluster: first excerpt should hold the second match as context: %+v", m)
+	}
+	res = get("q=needle&ctx=0&path=" + url.QueryEscape(cl))
+	if len(res[0].Matches) != 3 {
+		t.Fatalf("cluster ctx=0: got %d excerpts, want 3: %+v", len(res[0].Matches), res[0].Matches)
 	}
 
 	// Validation and allow-listing.
@@ -811,7 +882,7 @@ func TestIndexHandler(t *testing.T) {
 	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "vfs/main.js") {
 		t.Fatal("index template did not render the expected content")
 	}
-	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">dev<") {
+	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">version dev<") {
 		t.Fatal("index template did not render the version badge")
 	}
 }

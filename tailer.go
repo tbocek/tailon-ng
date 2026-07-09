@@ -374,11 +374,45 @@ const detectSample = 10
 // the file's format from its first detectSample lines (chosen across several
 // lines rather than guessed from one) and then reuses it. A line with no
 // recognizable timestamp inherits the file's previous one, so multi-line entries
-// stay together; if the file has none, lines fall back to time.Now.
+// stay together; if the file has none, lines fall back to time.Now — used for
+// ordering only, never shown. Streams prime their stampers from the file
+// itself (see primeTimestamper) so the backlog has a "previous one" to
+// inherit even when it starts mid-entry.
 type timestamper struct {
 	layout string
 	sample []string
 	last   time.Time
+}
+
+// primeStamperLines is how many trailing lines of a file are examined to prime
+// its timestamper: enough history that a backlog ending in undated
+// continuation lines (a stack trace, say) still finds its entry's date
+// further back in the log.
+const primeStamperLines = 200
+
+// primeTimestamper returns a timestamper for path with the format and the
+// "previous date" already known. The file's trailing lines pick the layout — a
+// far larger sample than the stream's first lines, which for a tail backlog
+// may all be undated continuations — and the last timestamp seen before the
+// final skip lines (the backlog the stream is about to deliver, which stamps
+// itself) becomes the date undated backlog lines inherit. A file with no
+// timestamps in that window keeps the time.Now fallback.
+func primeTimestamper(path string, skip int) *timestamper {
+	t := &timestamper{}
+	lines, _ := lastLines(path, primeStamperLines)
+	if len(lines) == 0 {
+		return t // unreadable or empty: detect from the stream as before
+	}
+	if t.layout = detectLayout(lines); t.layout == "" {
+		t.layout = "none"
+		return t
+	}
+	for _, line := range lines[:max(0, len(lines)-skip)] {
+		if ts, ok := matchLayout(t.layout, line); ok {
+			t.last = ts
+		}
+	}
+	return t
 }
 
 func (t *timestamper) stamp(line string) time.Time {
