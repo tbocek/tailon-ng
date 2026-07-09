@@ -142,6 +142,10 @@
         <pre>curl -sL https://raw.githubusercontent.com/tbocek/tailon-ng/main/install.sh | bash</pre>
         <p>Or build from source with Go 1.26+:</p>
         <pre>go install github.com/tbocek/tailon-ng@latest</pre>
+        <p>Or run the multi-arch container image — a <b>distroless</b> static base, non-root, ~11&nbsp;MB:</p>
+        <pre>docker run --rm -p 127.0.0.1:8080:8080 -v /var/log:/var/log:ro \
+  ghcr.io/tbocek/tailon-ng:latest /var/log</pre>
+        <p>It runs as a non-root user, so mount logs it can read (root-owned files need <code>--user</code> or readable mounts — see the <a href="https://github.com/tbocek/tailon-ng#docker">README</a>).</p>
     </section>
 
     <section>
