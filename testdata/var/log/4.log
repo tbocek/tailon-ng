@@ -1,0 +1,5 @@
+2026-07-17T08:15:11+02:00 ERROR worker: job 42 failed
+Traceback (most recent call last):
+  File "job.py", line 7, in run
+ValueError: bad input for job 42
+2026-07-17T08:15:12+02:00 INFO worker: job 43 done

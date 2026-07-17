@@ -1,0 +1,3 @@
+2026-07-17 08:15:02 INFO server: listening on :8080
+2026-07-17 08:15:03 WARN config: no TLS certificate configured
+2026-07-17 08:15:04 ERROR db: connection refused, retrying in 5s

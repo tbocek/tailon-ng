@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -42,7 +43,7 @@ func setupConfig(t *testing.T, source string) {
 }
 
 func TestListHandler(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 
 	w := httptest.NewRecorder()
 	listHandler(w, httptest.NewRequest("GET", "/list", nil))
@@ -54,7 +55,7 @@ func TestListHandler(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &listing); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if len(listing) != 1 || listing[0].Path != "testdata/ex1/var/log/1.log" {
+	if len(listing) != 1 || listing[0].Path != "testdata/var/log/1.log" {
 		t.Fatalf("unexpected listing: %#v", listing)
 	}
 }
@@ -63,15 +64,15 @@ func TestListHandler(t *testing.T) {
 // against the concurrent readers fileAllowed/allowedFiles, as happens when a
 // /list request overlaps a /stream or /files request. It must pass under -race.
 func TestListingNoRace(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/")
+	setupConfig(t, "testdata/var/log/")
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Add(2)
 		go func() { defer wg.Done(); createListing(config.Sources) }()
 		go func() {
 			defer wg.Done()
-			_ = allowedFiles()
-			fileAllowed("testdata/ex1/var/log/1.log")
+			_ = allowedFiles("")
+			fileAllowed("testdata/var/log/1.log")
 		}()
 	}
 	wg.Wait()
@@ -130,13 +131,20 @@ func frameTexts(frames []sseFrame) []string {
 	return out
 }
 
+// log1Lines mirrors testdata/var/log/1.log, line by line.
+var log1Lines = []string{
+	"2026-07-17 08:15:02 INFO server: listening on :8080",
+	"2026-07-17 08:15:03 WARN config: no TLS certificate configured",
+	"2026-07-17 08:15:04 ERROR db: connection refused, retrying in 5s",
+}
+
 // TestStreamTail checks tail mode shows the last nlines lines.
 func TestStreamTail(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=tail&path=testdata/ex1/var/log/1.log&nlines=2")
+	resp, err := http.Get(srv.URL + "?mode=tail&path=testdata/var/log/1.log&nlines=2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,25 +154,25 @@ func TestStreamTail(t *testing.T) {
 	}
 
 	got := frameTexts(readSSEData(t, resp.Body, 2, 5*time.Second))
-	if want := []string{"2", "3"}; !reflect.DeepEqual(got, want) {
+	if want := log1Lines[1:]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
-// TestStreamGrep checks grep mode reads the whole file from the start.
-func TestStreamGrep(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+// TestStreamView checks view mode reads the whole file from the start.
+func TestStreamView(t *testing.T) {
+	setupConfig(t, "testdata/var/log/1.log")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=grep&path=testdata/ex1/var/log/1.log")
+	resp, err := http.Get(srv.URL + "?mode=view&path=testdata/var/log/1.log")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 
 	got := frameTexts(readSSEData(t, resp.Body, 3, 5*time.Second))
-	if want := []string{"1", "2", "3"}; !reflect.DeepEqual(got, want) {
+	if want := log1Lines; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
@@ -173,22 +181,45 @@ func TestStreamGrep(t *testing.T) {
 // nlines matching lines: the client discards anything past its scrollback, so
 // the server does not ship it. Reading the whole file still drives progress.
 func TestStreamViewCap(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log") // lines: 1, 2, 3
+	setupConfig(t, "testdata/var/log/1.log")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=grep&nlines=2&path=testdata/ex1/var/log/1.log")
+	resp, err := http.Get(srv.URL + "?mode=view&nlines=2&path=testdata/var/log/1.log")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body) // view closes at EOF
 	resp.Body.Close()
 	got := frameTexts(readSSEData(t, strings.NewReader(string(body)), 99, 5*time.Second))
-	if want := []string{"2", "3"}; !reflect.DeepEqual(got, want) {
+	if want := log1Lines[1:]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capped view: got %v, want %v", got, want)
 	}
 	if !strings.Contains(string(body), "event: progress") {
 		t.Fatal("capped view should still report progress")
+	}
+}
+
+// TestStreamArchiveTestdata checks that viewing the checked-in rotated archive
+// (testdata/var/log/1.log.1.gz) decodes it transparently.
+func TestStreamArchiveTestdata(t *testing.T) {
+	setupConfig(t, "testdata/var/log/")
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=view&path=" + url.QueryEscape("testdata/var/log/1.log.1.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body) // an archive view closes at EOF
+	resp.Body.Close()
+	got := frameTexts(readSSEData(t, strings.NewReader(string(body)), 99, 5*time.Second))
+	want := []string{
+		"2026-07-16 23:59:58 INFO server: rotating logs",
+		"2026-07-16 23:59:59 INFO server: shutdown complete",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("archive view: got %v, want %v", got, want)
 	}
 }
 
@@ -254,7 +285,7 @@ func TestStreamFollow(t *testing.T) {
 
 // TestStreamAllFiles checks the all=1 mode streams every file, prefixed by path.
 func TestStreamAllFiles(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/")
+	setupConfig(t, "testdata/var/log/")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
@@ -267,7 +298,7 @@ func TestStreamAllFiles(t *testing.T) {
 	got := readSSEData(t, resp.Body, 2, 5*time.Second)
 	found := false
 	for _, frame := range got {
-		if strings.Contains(frame.P, "testdata/ex1/var/log/") {
+		if strings.Contains(frame.P, "testdata/var/log/") {
 			found = true
 		}
 	}
@@ -407,11 +438,11 @@ func TestAggregateTailSkipsArchives(t *testing.T) {
 	}
 }
 
-// TestStreamRejectsAggregateView checks that view (grep) is limited to single
+// TestStreamRejectsAggregateView checks that view is limited to single
 // files: an aggregate view is rejected (400), as is any unknown mode.
 func TestStreamRejectsAggregateView(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/")
-	for _, q := range []string{"mode=grep&all=1", "mode=grep&all=1&scope=testdata/ex1/var/", "mode=grep-all&all=1"} {
+	setupConfig(t, "testdata/var/log/")
+	for _, q := range []string{"mode=view&all=1", "mode=view&all=1&scope=testdata/var/", "mode=view-all&all=1"} {
 		w := httptest.NewRecorder()
 		streamHandler(w, httptest.NewRequest("GET", "/stream?"+q, nil))
 		if w.Code != http.StatusBadRequest {
@@ -421,7 +452,7 @@ func TestStreamRejectsAggregateView(t *testing.T) {
 }
 
 // TestStaleForcedToGrep checks that tail on an archive is coerced into a single
-// decoded grep pass instead of following compressed bytes.
+// decoded read-once pass instead of following compressed bytes.
 func TestStaleForcedToGrep(t *testing.T) {
 	dir := writeArchives(t)
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
@@ -453,7 +484,7 @@ func TestStreamResume(t *testing.T) {
 	defer srv.Close()
 
 	// Full read: offsets 2, 4, 6.
-	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(path))
+	resp, err := http.Get(srv.URL + "?mode=view&path=" + url.QueryEscape(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +497,7 @@ func TestStreamResume(t *testing.T) {
 	}
 
 	// Resume from byte 4: only the last line.
-	resp, err = http.Get(srv.URL + "?mode=grep&offset=4&path=" + url.QueryEscape(path))
+	resp, err = http.Get(srv.URL + "?mode=view&offset=4&path=" + url.QueryEscape(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +548,7 @@ func TestViewFollowsAppends(t *testing.T) {
 	}
 }
 
-// TestStreamProgress checks that grep loads report byte progress and finish at
+// TestStreamProgress checks that view loads report byte progress and finish at
 // done == total (the client's 0-100 bar).
 func TestStreamProgress(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "p.log")
@@ -531,11 +562,11 @@ func TestStreamProgress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(path))
+	resp, err := http.Get(srv.URL + "?mode=view&path=" + url.QueryEscape(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body) // grep closes at EOF
+	body, _ := io.ReadAll(resp.Body) // view closes at EOF
 	resp.Body.Close()
 	if !strings.Contains(string(body), "event: progress") {
 		t.Fatalf("no progress events in:\n%s", body)
@@ -558,11 +589,11 @@ func TestArchiveProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Get(srv.URL + "?mode=grep&path=" + url.QueryEscape(gz))
+	resp, err := http.Get(srv.URL + "?mode=view&path=" + url.QueryEscape(gz))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body) // grep closes at EOF
+	body, _ := io.ReadAll(resp.Body) // view closes at EOF
 	resp.Body.Close()
 	want := fmt.Sprintf(`{"d":%d,"t":%d}`, fi.Size(), fi.Size())
 	if !strings.Contains(string(body), want) {
@@ -587,11 +618,11 @@ func TestStreamReset(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=grep&offset=999&path=" + url.QueryEscape(path))
+	resp, err := http.Get(srv.URL + "?mode=view&offset=999&path=" + url.QueryEscape(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body) // grep closes at EOF, so the body ends
+	body, _ := io.ReadAll(resp.Body) // view closes at EOF, so the body ends
 	resp.Body.Close()
 	if !strings.Contains(string(body), "event: reset") {
 		t.Fatalf("expected a reset event, got:\n%s", body)
@@ -798,11 +829,11 @@ func TestFindHandler(t *testing.T) {
 // TestStreamLive checks tail signals the end of its initial catch-up read, so
 // the client can hide the loading bar shown just for the initial load.
 func TestStreamLive(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "?mode=tail&nlines=2&path=testdata/ex1/var/log/1.log")
+	resp, err := http.Get(srv.URL + "?mode=tail&nlines=2&path=testdata/var/log/1.log")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +864,7 @@ func TestStreamLive(t *testing.T) {
 }
 
 func TestStreamRejectsUnknownFile(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 	w := httptest.NewRecorder()
 	streamHandler(w, httptest.NewRequest("GET", "/stream?mode=tail&path=/etc/passwd", nil))
 	if w.Code != http.StatusNotFound {
@@ -844,15 +875,15 @@ func TestStreamRejectsUnknownFile(t *testing.T) {
 // TestServerStack drives requests through the real router + access-log
 // middleware (setupRoutes wrapped in loggingHandler).
 func TestServerStack(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
-	ts := httptest.NewServer(loggingHandler(io.Discard, setupRoutes(config.RelativeRoot)))
+	setupConfig(t, "testdata/var/log/1.log")
+	ts := httptest.NewServer(loggingHandler(slog.New(slog.DiscardHandler), setupRoutes(config.RelativeRoot)))
 	defer ts.Close()
 
 	cases := []struct{ path, want string }{
 		{"/", `id="toolbar"`},
-		{"/vfs/main.js", "EventSource"},
-		{"/vfs/main.css", "log-entry"},
-		{"/list", "testdata/ex1/var/log/1.log"},
+		{"/main.js", "EventSource"},
+		{"/main.css", "log-entry"},
+		{"/list", "testdata/var/log/1.log"},
 	}
 	for _, tc := range cases {
 		resp, err := http.Get(ts.URL + tc.path)
@@ -871,7 +902,7 @@ func TestServerStack(t *testing.T) {
 }
 
 func TestIndexHandler(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 
 	w := httptest.NewRecorder()
 	indexHandler(w, httptest.NewRequest("GET", "/", nil))
@@ -879,7 +910,7 @@ func TestIndexHandler(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "vfs/main.js") {
+	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "main.js") {
 		t.Fatal("index template did not render the expected content")
 	}
 	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">version dev<") {
@@ -888,12 +919,12 @@ func TestIndexHandler(t *testing.T) {
 }
 
 func TestDownloadHandler(t *testing.T) {
-	setupConfig(t, "testdata/ex1/var/log/1.log")
+	setupConfig(t, "testdata/var/log/1.log")
 
 	// Allowed file: served, but as a no-sniff plain-text attachment so a log that
 	// looks like HTML cannot execute as script in this origin.
 	w := httptest.NewRecorder()
-	downloadHandler(w, httptest.NewRequest("GET", "/files/?path=testdata/ex1/var/log/1.log", nil))
+	downloadHandler(w, httptest.NewRequest("GET", "/files/?path=testdata/var/log/1.log", nil))
 	if w.Code != http.StatusOK {
 		t.Errorf("allowed download: status = %d", w.Code)
 	}

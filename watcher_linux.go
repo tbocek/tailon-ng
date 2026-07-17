@@ -158,14 +158,12 @@ func (w *fileWatch) wait(ctx context.Context) bool {
 	if !w.sub {
 		return sleep(ctx, pollInterval)
 	}
-	t := time.NewTimer(watchFallback)
-	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
 	case <-w.ch:
 		return true
-	case <-t.C:
+	case <-time.After(watchFallback):
 		return true
 	}
 }

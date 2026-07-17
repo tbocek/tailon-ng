@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/gzip" // drop-in, decodes ~2x faster than compress/gzip
@@ -65,6 +66,24 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 		defer w.close()
 	}
 
+	// fail surfaces an open or read error once — a silently empty view is
+	// undebuggable (missing file, permission denied) — and reports whether to
+	// keep going: follow waits for the file to (re)appear, read-once gives up.
+	fail := func(err error) bool {
+		if !notified {
+			notified = true
+			send("tailon-ng: "+err.Error(), -1)
+		}
+		if !follow {
+			return false
+		}
+		if !caughtUp {
+			caughtUp = true
+			send("", posCaughtUp) // nothing to catch up on: live immediately
+		}
+		return w.wait(ctx)
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -72,21 +91,7 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 
 		f, err := os.Open(path)
 		if err != nil {
-			// Surface the reason once — a silently empty view is undebuggable
-			// (missing file, permission denied). Follow keeps waiting: files
-			// that don't exist yet may appear.
-			if !notified {
-				notified = true
-				send("tailon-ng: "+err.Error(), -1)
-			}
-			if !follow {
-				return
-			}
-			if !caughtUp {
-				caughtUp = true
-				send("", posCaughtUp) // nothing to catch up on: live immediately
-			}
-			if !w.wait(ctx) {
+			if !fail(err) {
 				return
 			}
 			continue
@@ -105,39 +110,22 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 			prev = info
 		}
 
-		f.Seek(offset, io.SeekStart)
-		data, _ := io.ReadAll(f)
-		f.Close()
-		offset += int64(len(data))
-
-		// offset is now the absolute position of the end of data, so the
-		// position just past each line is offset minus what remains unconsumed.
-		// Lines end at "\n", "\r\n" or a lone "\r" (CR-only files exist; a file
-		// whose tail held no "\n" at all used to render as nothing).
-		data = append(partial, data...)
-		partial = nil
-		for {
-			i := bytes.IndexAny(data, "\r\n")
-			if i < 0 {
-				if follow {
-					partial = data // hold an unterminated line until its newline arrives
-				} else if len(data) > 0 {
-					send(string(data), offset)
-				}
-				break
-			}
-			if data[i] == '\r' && i == len(data)-1 && follow {
-				partial = data // might be the first half of a CRLF pair; wait
-				break
-			}
-			line := string(data[:i])
-			skip := 1
-			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
-				skip = 2
-			}
-			data = data[i+skip:]
-			send(line, offset-int64(len(data)))
+		_, err = f.Seek(offset, io.SeekStart)
+		var data []byte
+		if err == nil {
+			data, err = io.ReadAll(f)
 		}
+		f.Close()
+		if err != nil {
+			// A mid-read failure retries next round from the same offset
+			// (nothing was consumed).
+			if !fail(err) {
+				return
+			}
+			continue
+		}
+		offset += int64(len(data))
+		partial = emitLines(append(partial, data...), offset, follow, send)
 
 		if !follow {
 			return
@@ -149,6 +137,38 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 		if !w.wait(ctx) {
 			return
 		}
+	}
+}
+
+// emitLines sends every complete line in data. offset is the absolute position
+// of data's end, so each line's position — the resume point just past it — is
+// offset minus what remains unconsumed. Lines end at "\n", "\r\n" or a lone
+// "\r" (CR-only files exist; a file whose tail held no "\n" at all used to
+// render as nothing). The unterminated tail is returned to carry into the next
+// read: in follow mode later bytes may complete the line (or turn a trailing
+// "\r" into a "\r\n" pair); a read-once pass sends it as a final line instead.
+func emitLines(data []byte, offset int64, follow bool, send func(string, int64)) []byte {
+	for {
+		i := bytes.IndexAny(data, "\r\n")
+		if i < 0 {
+			if follow {
+				return data // hold an unterminated line until its newline arrives
+			}
+			if len(data) > 0 {
+				send(string(data), offset)
+			}
+			return nil
+		}
+		if data[i] == '\r' && i == len(data)-1 && follow {
+			return data // might be the first half of a CRLF pair; wait
+		}
+		line := string(data[:i])
+		skip := 1
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			skip = 2
+		}
+		data = data[i+skip:]
+		send(line, offset-int64(len(data)))
 	}
 }
 
@@ -200,7 +220,8 @@ func streamCompressed(ctx context.Context, path string, send func(string, int64)
 	}
 	defer f.Close()
 
-	cr := &countingReader{r: f}
+	var pos int64
+	cr := &countingReader{r: f, n: &pos}
 	r, err := decoder(path)(cr)
 	if err != nil {
 		send("tailon-ng: cannot decompress "+path+": "+err.Error(), -1)
@@ -213,7 +234,9 @@ func streamCompressed(ctx context.Context, path string, send func(string, int64)
 		line, err := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" || err == nil {
-			send(line, cr.n)
+			// Loaded atomically: the zstd decoder reads ahead from its own
+			// goroutines, so the counter can advance concurrently.
+			send(line, atomic.LoadInt64(&pos))
 		}
 		if err != nil {
 			return
@@ -221,27 +244,27 @@ func streamCompressed(ctx context.Context, path string, send func(string, int64)
 	}
 }
 
-// countingReader counts the bytes read through it: the compressed-side
-// position of a decoded stream, which is what archive progress is measured in.
+// countingReader counts bytes read through it into *n: the on-disk position of
+// a possibly-decoded stream, which is what progress is measured in. The adds
+// are atomic so a progress ticker may poll n from another goroutine (as
+// /find's does) while the reader advances it.
 type countingReader struct {
 	r io.Reader
-	n int64
+	n *int64
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	c.n += int64(n)
+	atomic.AddInt64(c.n, int64(n))
 	return n, err
 }
 
 // sleep waits for d or until ctx is cancelled, returning false if cancelled.
 func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-t.C:
+	case <-time.After(d):
 		return true
 	}
 }
@@ -264,18 +287,11 @@ func lastLines(path string, n int) ([]string, int64) {
 	// The read window scales with n: tail's 10-line backlog needs little; the
 	// view's full-scrollback backlog (MAX_LINES) far more — but bounded, so a
 	// multi-gigabyte file is never read whole just to show its tail.
-	maxRead := int64(n) * 512
-	if maxRead < 256*1024 {
-		maxRead = 256 * 1024
+	maxRead := min(max(int64(n)*512, 256*1024), 16*1024*1024)
+	start := max(size-maxRead, 0)
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil, size
 	}
-	if maxRead > 16*1024*1024 {
-		maxRead = 16 * 1024 * 1024
-	}
-	start := int64(0)
-	if size > maxRead {
-		start = size - maxRead
-	}
-	f.Seek(start, io.SeekStart)
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, size
@@ -337,51 +353,40 @@ func matchLayout(layout, line string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// matchAny returns the time from the first layout that matches line.
-func matchAny(line string) (time.Time, bool) {
-	for _, layout := range timeLayouts {
-		if t, ok := matchLayout(layout, line); ok {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
-// detectLayout returns the layout matching the most of the sample lines, so the
-// format is chosen from several lines rather than guessed from one. It returns
-// "" if no layout matches any line.
-func detectLayout(sample []string) string {
-	best, bestN := "", 0
-	for _, layout := range timeLayouts {
-		n := 0
-		for _, line := range sample {
-			if _, ok := matchLayout(layout, line); ok {
-				n++
-			}
-		}
-		if n > bestN {
-			best, bestN = layout, n
-		}
-	}
-	return best
-}
-
-// detectSample is how many of a file's first lines are sampled to detect its
-// timestamp format before that format is locked in.
-const detectSample = 10
-
-// timestamper extracts a timestamp from each line of a single file. It detects
-// the file's format from its first detectSample lines (chosen across several
-// lines rather than guessed from one) and then reuses it. A line with no
-// recognizable timestamp inherits the file's previous one, so multi-line entries
-// stay together; if the file has none, lines fall back to time.Now — used for
-// ordering only, never shown. Streams prime their stampers from the file
-// itself (see primeTimestamper) so the backlog has a "previous one" to
-// inherit even when it starts mid-entry.
+// timestamper extracts a timestamp from each line of a single file. The layout
+// that matched last is tried first (a file rarely changes format mid-stream);
+// when it fails, every layout is tried, so a file whose first timestamp comes
+// late — or that switches format — is picked up without any locked-in
+// detection. A line with no recognizable timestamp inherits the file's
+// previous one, so multi-line entries stay together; before any is seen, lines
+// fall back to time.Now — used for ordering only, never shown. Streams prime
+// their stampers from the file itself (see primeTimestamper) so the backlog
+// has a "previous one" to inherit even when it starts mid-entry.
 type timestamper struct {
-	layout string
-	sample []string
-	last   time.Time
+	layout string    // the layout that matched last, tried first
+	last   time.Time // the last timestamp seen; inherited by undated lines
+}
+
+func (t *timestamper) stamp(line string) time.Time {
+	if t.layout != "" {
+		if ts, ok := matchLayout(t.layout, line); ok {
+			t.last = ts
+			return ts
+		}
+	}
+	for _, layout := range timeLayouts {
+		if layout == t.layout {
+			continue // already tried
+		}
+		if ts, ok := matchLayout(layout, line); ok {
+			t.layout, t.last = layout, ts
+			return ts
+		}
+	}
+	if !t.last.IsZero() {
+		return t.last // continuation line: keep with the previous entry
+	}
+	return time.Now()
 }
 
 // primeStamperLines is how many trailing lines of a file are examined to prime
@@ -390,54 +395,16 @@ type timestamper struct {
 // further back in the log.
 const primeStamperLines = 200
 
-// primeTimestamper returns a timestamper for path with the format and the
-// "previous date" already known. The file's trailing lines pick the layout — a
-// far larger sample than the stream's first lines, which for a tail backlog
-// may all be undated continuations — and the last timestamp seen before the
-// final skip lines (the backlog the stream is about to deliver, which stamps
-// itself) becomes the date undated backlog lines inherit. A file with no
-// timestamps in that window keeps the time.Now fallback.
+// primeTimestamper returns a timestamper for path with the layout and the
+// "previous date" already known: it stamps the file's trailing lines, stopping
+// before the final skip lines (the backlog the stream is about to deliver,
+// which stamps itself). A file with no timestamps in that window keeps the
+// time.Now fallback.
 func primeTimestamper(path string, skip int) *timestamper {
 	t := &timestamper{}
 	lines, _ := lastLines(path, primeStamperLines)
-	if len(lines) == 0 {
-		return t // unreadable or empty: detect from the stream as before
-	}
-	if t.layout = detectLayout(lines); t.layout == "" {
-		t.layout = "none"
-		return t
-	}
 	for _, line := range lines[:max(0, len(lines)-skip)] {
-		if ts, ok := matchLayout(t.layout, line); ok {
-			t.last = ts
-		}
+		t.stamp(line)
 	}
 	return t
-}
-
-func (t *timestamper) stamp(line string) time.Time {
-	var ts time.Time
-	var ok bool
-	switch t.layout {
-	case "none": // no usable timestamp format in this file
-	case "": // still sampling to detect the format
-		ts, ok = matchAny(line)
-		if t.sample = append(t.sample, line); len(t.sample) >= detectSample {
-			if t.layout = detectLayout(t.sample); t.layout == "" {
-				t.layout = "none"
-			}
-			t.sample = nil
-		}
-	default:
-		ts, ok = matchLayout(t.layout, line)
-	}
-	switch {
-	case ok:
-		t.last = ts
-		return ts
-	case !t.last.IsZero():
-		return t.last // continuation line: keep with the previous entry
-	default:
-		return time.Now()
-	}
 }

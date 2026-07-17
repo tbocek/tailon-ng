@@ -2,16 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,20 +26,10 @@ import (
 func setupRoutes(relativeroot string) *http.ServeMux {
 	router := http.NewServeMux()
 
-	// Serve the embedded frontend assets (see frontend.go). Only the two real
-	// web assets are exposed: the Go template living beside them is server-side
-	// input, and there is no directory to browse.
-	staticHandler := noCacheControl(http.FileServerFS(frontendAssets))
-	staticHandler = http.StripPrefix(relativeroot+"vfs/", staticHandler)
-
-	router.HandleFunc(relativeroot+"vfs/", func(w http.ResponseWriter, r *http.Request) {
-		switch strings.TrimPrefix(r.URL.Path, relativeroot+"vfs/") {
-		case "main.css", "main.js":
-			staticHandler.ServeHTTP(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+	// Serve the two embedded web assets (see frontend.go). The Go template
+	// living beside them is server-side input, not exposed.
+	router.HandleFunc(relativeroot+"main.css", serveAsset("text/css; charset=utf-8", mainCSS))
+	router.HandleFunc(relativeroot+"main.js", serveAsset("text/javascript; charset=utf-8", mainJS))
 	router.HandleFunc(relativeroot+"list", listHandler)
 	router.HandleFunc(relativeroot+"stream", streamHandler)
 	router.HandleFunc(relativeroot+"find", findHandler)
@@ -46,14 +39,15 @@ func setupRoutes(relativeroot string) *http.ServeMux {
 	return router
 }
 
-func setupServer(config *Config, addr string, logger *log.Logger) *http.Server {
+func setupServer(config *Config, addr string) *http.Server {
 	router := setupRoutes(config.RelativeRoot)
-	loggingRouter := loggingHandler(os.Stderr, router)
+	loggingRouter := loggingHandler(slog.Default(), router)
 
 	server := http.Server{
-		Addr:        addr,
-		Handler:     loggingRouter,
-		ErrorLog:    logger,
+		Addr:    addr,
+		Handler: loggingRouter,
+		// http.Server predates slog and wants a *log.Logger; bridge it.
+		ErrorLog:    slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 		ReadTimeout: 5 * time.Second,
 		// No WriteTimeout: the /stream endpoint serves long-lived Server-Sent
 		// Events connections that a write deadline would abruptly cut off.
@@ -65,10 +59,12 @@ func setupServer(config *Config, addr string, logger *log.Logger) *http.Server {
 
 // indexTemplate is parsed once at startup — the template is embedded in the
 // binary, so it cannot change while the process runs.
-var indexTemplate = template.Must(template.ParseFS(frontendAssets, "tailon.html"))
+var indexTemplate = template.Must(template.New("main.html").Parse(indexHTML))
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
-	indexTemplate.Execute(w, config)
+	if err := indexTemplate.Execute(w, config); err != nil {
+		slog.Error("rendering index", "err", err)
+	}
 }
 
 // listHandler returns the current file listing as JSON. The frontend fetches it
@@ -77,14 +73,14 @@ func listHandler(w http.ResponseWriter, r *http.Request) {
 	listing := createListing(config.Sources)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(listing); err != nil {
-		log.Println("error: ", err)
+		slog.Error("writing file listing", "err", err)
 	}
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if !fileAllowed(path) {
-		log.Printf("warn: attempt to access unknown file: %q", path)
+		slog.Warn("attempt to access unknown file", "path", path)
 		http.Error(w, "unknown file", http.StatusNotFound)
 		return
 	}
@@ -97,13 +93,14 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-func noCacheControl(h http.Handler) http.Handler {
-	fn := func(w http.ResponseWriter, r *http.Request) {
+// serveAsset serves one embedded asset. Caching is disabled: a redeployed
+// binary may carry different assets, so clients must always fetch fresh ones.
+func serveAsset(contentType string, body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		h.ServeHTTP(w, r)
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 	}
-
-	return http.HandlerFunc(fn)
 }
 
 // responseRecorder wraps an http.ResponseWriter to capture the status code and
@@ -129,10 +126,12 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 
 func (r *responseRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// loggingHandler logs each request in Apache Common Log Format. Streaming keeps
-// working because the SSE handler flushes through http.ResponseController,
-// which unwraps responseRecorder to reach the real writer.
-func loggingHandler(out io.Writer, next http.Handler) http.Handler {
+// loggingHandler logs each request through logger, one INFO line per request.
+// Streaming keeps working because the SSE handler flushes through
+// http.ResponseController, which unwraps responseRecorder to reach the real
+// writer. For long-lived SSE streams the line appears when the stream ends,
+// with duration and bytes covering the whole stream.
+func loggingHandler(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
@@ -142,9 +141,9 @@ func loggingHandler(out io.Writer, next http.Handler) http.Handler {
 		if err != nil {
 			host = r.RemoteAddr
 		}
-		fmt.Fprintf(out, "%s - - [%s] %q %d %d\n",
-			host, start.Format("02/Jan/2006:15:04:05 -0700"),
-			r.Method+" "+r.RequestURI+" "+r.Proto, rec.status, rec.bytes)
+		logger.Info("request", "host", host, "method", r.Method,
+			"uri", r.RequestURI, "status", rec.status, "bytes", rec.bytes,
+			"duration", time.Since(start).Round(time.Millisecond))
 	})
 }
 
@@ -159,6 +158,17 @@ const (
 	findMaxMatches = 3
 	findCtxLines   = 3
 )
+
+// queryInt returns the named query parameter as an int clamped to at most hi,
+// or def when the parameter is absent, malformed, or below lo. A bound always
+// stands: clients pick values only within [lo, hi].
+func queryInt(query url.Values, name string, def, lo, hi int) int {
+	n, err := strconv.Atoi(query.Get(name))
+	if err != nil || n < lo {
+		return def
+	}
+	return min(n, hi)
+}
 
 // findMatch is one search hit with its surrounding lines.
 type findMatch struct {
@@ -203,19 +213,9 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 
 	var paths []string
 	if query.Get("all") == "1" {
-		if scope := query.Get("scope"); scope != "" {
-			paths = allowedUnder(scope)
-		} else {
-			paths = allowedFiles()
-		}
+		paths = allowedFiles(query.Get("scope")) // "" scope selects everything
 		if query.Get("stale") != "1" {
-			live := paths[:0]
-			for _, p := range paths {
-				if !isStale(p) {
-					live = append(live, p)
-				}
-			}
-			paths = live
+			paths = slices.DeleteFunc(paths, isStale)
 		}
 	} else {
 		path := query.Get("path")
@@ -243,71 +243,29 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	counting := query.Get("count") == "1"
 	// max adjusts the per-file excerpt cap (bounded): the UI's matches-per-file
 	// select, and the view's "continue search", which lists up to 100 matches
-	// of a single file instead of the default scent-trail few.
-	maxMatches := findMaxMatches
-	if v := query.Get("max"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			if n > 100 {
-				n = 100
-			}
-			maxMatches = n
-		}
-	}
-	// ctx adjusts how many lines of context surround each match (0 = just the
-	// matching lines), bounded like max.
-	ctxLines := findCtxLines
-	if v := query.Get("ctx"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			if n > 10 {
-				n = 10
-			}
-			ctxLines = n
-		}
-	}
+	// of a single file instead of the default scent-trail few. ctx adjusts how
+	// many lines of context surround each match (0 = just the matching lines).
+	maxMatches := queryInt(query, "max", findMaxMatches, 1, 100)
+	ctxLines := queryInt(query, "ctx", findCtxLines, 0, 10)
 	matches := make([][]findMatch, len(paths))
 	counts := make([]int64, len(paths))
 	read := make([]int64, len(paths)) // per-file bytes consumed, updated atomically
 	var wg sync.WaitGroup
 	for i, p := range paths {
-		wg.Add(1)
-		go func(i int, p string) {
-			defer wg.Done()
+		wg.Go(func() {
 			if counting {
 				counts[i] = countInFile(r.Context(), p, re, invert, &read[i])
 			} else {
 				matches[i] = findInFile(r.Context(), p, re, invert, &read[i], maxMatches, ctxLines)
 			}
-		}(i, p)
+		})
 	}
 	scansDone := make(chan struct{})
 	go func() { wg.Wait(); close(scansDone) }()
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
-	rc := http.NewResponseController(w)
-	pct := -1
-	ticker := time.NewTicker(150 * time.Millisecond)
-	defer ticker.Stop()
-progress:
-	for {
-		select {
-		case <-scansDone:
-			break progress
-		case <-ticker.C:
-			var done int64
-			for i := range read {
-				done += atomic.LoadInt64(&read[i])
-			}
-			if total <= 0 {
-				continue
-			}
-			if p := int(done * 100 / total); p != pct {
-				pct = p
-				fmt.Fprintf(w, "{\"d\":%d,\"t\":%d}\n", done, total)
-				rc.Flush()
-			}
-		}
-	}
+	reportProgress(w, scansDone, read, total)
 
 	if counting {
 		type fileCount struct {
@@ -318,9 +276,11 @@ progress:
 		for i, p := range paths {
 			out[i] = fileCount{p, counts[i]}
 		}
-		json.NewEncoder(w).Encode(struct {
+		if err := json.NewEncoder(w).Encode(struct {
 			Counts []fileCount `json:"counts"`
-		}{out})
+		}{out}); err != nil {
+			slog.Error("writing count results", "err", err)
+		}
 		return
 	}
 	results := []findResult{}
@@ -329,23 +289,65 @@ progress:
 			results = append(results, findResult{Path: p, Matches: matches[i]})
 		}
 	}
-	json.NewEncoder(w).Encode(struct {
+	if err := json.NewEncoder(w).Encode(struct {
 		Results []findResult `json:"results"`
-	}{results})
+	}{results}); err != nil {
+		slog.Error("writing find results", "err", err)
+	}
 }
 
-// atomicCounter counts bytes read through it, safe to read from the progress
-// ticker while a scan goroutine advances it (unlike tailer.go's countingReader,
-// which stays within one goroutine).
-type atomicCounter struct {
-	r io.Reader
-	n *int64
+// progressGauge tracks done/total bytes and reports when the integer percent
+// moves, so a progress stream writes at most ~100 updates however large the
+// input. Both progress protocols meter through it: /find's NDJSON lines and
+// /stream's SSE frames.
+type progressGauge struct {
+	done, total int64
+	pct         int // last percent reported; -1 so that 0% still reports
 }
 
-func (c atomicCounter) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	atomic.AddInt64(c.n, int64(n))
-	return n, err
+// step advances the gauge to pos and reports whether a new percent was crossed,
+// clamped at 100 (data appended after connect would push past the total).
+func (g *progressGauge) step(pos int64) bool {
+	if g.total <= 0 || pos < g.done {
+		return false
+	}
+	g.done = pos
+	pct := min(int(pos*100/g.total), 100)
+	if pct == g.pct {
+		return false
+	}
+	g.pct = pct
+	return true
+}
+
+// reportProgress writes an NDJSON progress line {"d":done,"t":total} at most
+// every 150ms until done closes, each flushed immediately so the client's
+// 0-100 bar moves while the scan runs (a rare needle means reading everything).
+// read holds per-file byte counters the scan goroutines advance atomically.
+func reportProgress(w http.ResponseWriter, scansDone <-chan struct{}, read []int64, total int64) {
+	if total <= 0 {
+		<-scansDone
+		return
+	}
+	rc := http.NewResponseController(w)
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	gauge := progressGauge{total: total, pct: -1}
+	for {
+		select {
+		case <-scansDone:
+			return
+		case <-ticker.C:
+			var done int64
+			for i := range read {
+				done += atomic.LoadInt64(&read[i])
+			}
+			if gauge.step(done) {
+				fmt.Fprintf(w, "{\"d\":%d,\"t\":%d}\n", done, total)
+				rc.Flush()
+			}
+		}
+	}
 }
 
 // scanLines reads path line by line — decoded if compressed, with consumed
@@ -360,7 +362,7 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 	defer f.Close()
 	// The counter sits between the file and the decoder, so progress measures
 	// on-disk bytes for plain and compressed files alike.
-	var rd io.Reader = atomicCounter{f, nRead}
+	var rd io.Reader = &countingReader{f, nRead}
 	if d := decoder(path); d != nil {
 		if rd, err = d(rd); err != nil {
 			return
@@ -456,10 +458,10 @@ type logLine struct {
 // streamHandler streams a file (or every served file, with all=1) to the client
 // over Server-Sent Events. Query parameters:
 //
-//	mode    "tail" (default) follows the file like tail -f; "grep" reads the
+//	mode    "tail" (default) follows the file like tail -f; "view" reads the
 //	        whole file once, from the start, without following — the UI's
 //	        "view", single files only. Aggregate streams are always tailed
-//	        and skip rotated/compressed files (grep the archives with /find).
+//	        and skip rotated/compressed files (search the archives with /find).
 //	nlines  in tail mode, how many trailing lines to show before following. In
 //	        view mode, a cap: at most the last nlines lines are sent — the
 //	        client discards anything past its scrollback anyway, so a huge
@@ -479,19 +481,18 @@ type logLine struct {
 // streams) the byte offset to resume from after this line. Reading and
 // following are all done in Go; searching the lines happens in the browser.
 func streamHandler(w http.ResponseWriter, r *http.Request) {
-	rc := http.NewResponseController(w)
 	query := r.URL.Query()
 
 	mode := query.Get("mode")
-	if mode != "" && mode != "tail" && mode != "grep" {
+	if mode != "" && mode != "tail" && mode != "view" {
 		http.Error(w, "unknown mode: "+mode, http.StatusBadRequest)
 		return
 	}
-	follow := mode != "grep" // "tail" (default) follows; "grep" reads once
+	follow := mode != "view" // "tail" (default) follows; "view" reads once — a live view arrives as tail (the client upgrades it)
 	nlines, _ := strconv.Atoi(query.Get("nlines"))
 
 	// Resolve the files to stream. "all=1" tails every served file at once —
-	// viewing (grep) a merged dump of several files is not useful, so it is
+	// viewing a merged dump of several files is not useful, so it is
 	// limited to single files. Rotated/compressed leftovers are skipped in
 	// aggregate streams: tailing them is meaningless and their raw bytes are
 	// garbage.
@@ -501,18 +502,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "view is limited to single files", http.StatusBadRequest)
 			return
 		}
-		if scope := query.Get("scope"); scope != "" {
-			paths = allowedUnder(scope) // just the files under one subfolder
-		} else {
-			paths = allowedFiles()
-		}
-		live := paths[:0]
-		for _, p := range paths {
-			if !isStale(p) {
-				live = append(live, p)
-			}
-		}
-		paths = live
+		paths = slices.DeleteFunc(allowedFiles(query.Get("scope")), isStale) // "" scope selects everything
 		if len(paths) == 0 {
 			http.Error(w, "no files to stream", http.StatusNotFound)
 			return
@@ -520,12 +510,12 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		path := query.Get("path")
 		if !fileAllowed(path) {
-			log.Printf("warn: attempt to stream unknown file: %q", path)
+			slog.Warn("attempt to stream unknown file", "path", path)
 			http.Error(w, "unknown file", http.StatusNotFound)
 			return
 		}
 		if isStale(path) {
-			follow = false // a rotation leftover never grows; force one grep pass
+			follow = false // a rotation leftover never grows; force one read-once pass
 		}
 		paths = []string{path}
 	}
@@ -548,157 +538,177 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
 	w.WriteHeader(http.StatusOK)
-	rc.Flush()
+
+	s := &sseStream{
+		w:          w,
+		rc:         http.NewResponseController(w),
+		multi:      len(paths) > 1,
+		compressed: decoder(paths[0]) != nil, // single-file: a decoded archive?
+		catchingUp: len(paths),
+		gauge:      progressGauge{pct: -1},
+	}
+	s.rc.Flush()
 
 	if reset {
-		fmt.Fprint(w, "event: reset\ndata: \n\n")
-		rc.Flush()
+		s.event("reset")
 	}
 
-	ctx := r.Context()
-	multi := len(paths) > 1
-
-	// Progress for view loads (single-file by construction — aggregate streams
-	// always follow): total is the file's on-disk size, and each line's pos
-	// advances the "done" count. For compressed archives pos is the
-	// compressed-side position (see streamCompressed), so measured against
-	// the same on-disk size they too get a real 0-100 bar.
-	var progTotal, progDone int64
-	progPct := -1
-	// Also for a follow stream resuming from a known offset (a cached view or
-	// tail): its catch-up is bounded by the size at connect time, so it can
-	// report 0-100 too; lines appended later just stay pinned at 100.
+	// Progress applies to view loads (single-file by construction — aggregate
+	// streams always follow) and to a follow stream resuming from a known
+	// offset (a cached view or tail): either way the read is bounded by the
+	// file's on-disk size at connect time, so it can report 0-100 — lines
+	// appended later just stay pinned at 100. For compressed archives each
+	// line's pos is the compressed-side position (see streamCompressed), so
+	// measured against the same on-disk size they too get a real bar.
 	if !follow || start >= 0 {
 		if fi, err := os.Stat(paths[0]); err == nil {
-			progTotal = fi.Size()
+			s.gauge.total = fi.Size()
 		}
-	}
-	progress := func(pos int64) bool {
-		if progTotal <= 0 || pos <= progDone {
-			return true
-		}
-		progDone = pos
-		pct := int(progDone * 100 / progTotal)
-		if pct > 100 {
-			pct = 100 // data appended after connect would push past the total
-		}
-		if pct != progPct {
-			progPct = pct
-			if _, err := fmt.Fprintf(w, "event: progress\ndata: {\"d\":%d,\"t\":%d}\n\n", progDone, progTotal); err != nil {
-				return false
-			}
-			rc.Flush()
-		}
-		return true
 	}
 
 	// Stream every file concurrently into a shared channel.
+	ctx := r.Context()
 	lines := make(chan logLine, 256)
 	var wg sync.WaitGroup
 	for _, p := range paths {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
+		wg.Go(func() {
 			streamFile(ctx, p, follow, nlines, start, func(text string, pos int64) {
 				select {
 				case lines <- logLine{p, text, pos}:
 				case <-ctx.Done():
 				}
 			})
-		}(p)
+		})
 	}
 	go func() { wg.Wait(); close(lines) }()
 
-	// In tail mode, each file reports once when its initial catch-up read is
-	// done; after the last one the client may hide its loading bar. This only
-	// concerns the initial load — the stream then just keeps following.
-	catchingUp := len(paths)
-	caughtUp := func(ln logLine) bool {
-		if ln.pos != posCaughtUp {
-			return false
-		}
-		if catchingUp--; catchingUp == 0 {
-			fmt.Fprint(w, "event: live\ndata: \n\n")
-			rc.Flush()
-		}
+	if s.multi {
+		streamMerged(ctx, s, lines, nlines)
+	} else {
+		streamSingle(ctx, s, lines, !follow && nlines > 0, nlines)
+	}
+}
+
+// sseStream is the write side of one /stream response: SSE framing, the
+// once-per-file catch-up accounting, and the progress gauge.
+type sseStream struct {
+	w          http.ResponseWriter
+	rc         *http.ResponseController
+	multi      bool // several files: frames carry the path, offsets are meaningless
+	compressed bool // a decoded archive: pos is compressed-side progress, not a resume offset
+	catchingUp int  // files still reading their initial backlog
+	gauge      progressGauge
+}
+
+// event writes a named SSE control frame ("reset", "live", "eof") and flushes
+// it out.
+func (s *sseStream) event(name string) {
+	fmt.Fprintf(s.w, "event: %s\ndata: \n\n", name)
+	s.rc.Flush()
+}
+
+// writeLine sends one line as an SSE data frame; false means the client is
+// gone. No flush here: during bulk reads a flush per line means a syscall and
+// a tiny packet per line — the callers flush once their batch is done.
+func (s *sseStream) writeLine(ln logLine) bool {
+	frame := struct {
+		Path string `json:"p,omitempty"` // set when several files are streamed
+		Text string `json:"t"`
+		Pos  int64  `json:"o,omitempty"` // resume offset, single-file streams only
+	}{Text: ln.text}
+	if s.multi {
+		frame.Path = ln.path
+	} else if ln.pos > 0 && !s.compressed {
+		frame.Pos = ln.pos
+	}
+	data, _ := json.Marshal(frame)
+	_, err := fmt.Fprintf(s.w, "data: %s\n\n", data)
+	return err == nil
+}
+
+// caughtUp consumes the marker each file sends once its initial catch-up read
+// is done; after the last one the client may hide its loading bar. This only
+// concerns the initial load — the stream then just keeps following.
+func (s *sseStream) caughtUp(ln logLine) bool {
+	if ln.pos != posCaughtUp {
+		return false
+	}
+	if s.catchingUp--; s.catchingUp == 0 {
+		s.event("live")
+	}
+	return true
+}
+
+// progress advances the gauge to pos and emits an SSE progress frame when it
+// crosses a new percent; false means the client is gone.
+func (s *sseStream) progress(pos int64) bool {
+	if !s.gauge.step(pos) {
 		return true
 	}
-	compressed := decoder(paths[0]) != nil // single-file: is it a decoded archive?
-	writeLine := func(ln logLine) bool {
-		frame := struct {
-			Path string `json:"p,omitempty"` // set when several files are streamed
-			Text string `json:"t"`
-			Pos  int64  `json:"o,omitempty"` // resume offset, single-file streams only
-		}{Text: ln.text}
-		if multi {
-			frame.Path = ln.path
-		} else if ln.pos > 0 && !compressed {
-			frame.Pos = ln.pos // an archive's pos is compressed-side progress, not a resume offset
-		}
-		data, _ := json.Marshal(frame)
-		// No flush here: during bulk reads a flush per line means a syscall and
-		// a tiny packet per line. The callers flush once their batch is done.
-		_, err := fmt.Fprintf(w, "data: %s\n\n", data)
-		return err == nil
+	if _, err := fmt.Fprintf(s.w, "event: progress\ndata: {\"d\":%d,\"t\":%d}\n\n", s.gauge.done, s.gauge.total); err != nil {
+		return false
 	}
-	// A single file is already in order, so stream its lines as they arrive.
-	// In view mode with an nlines cap, matching lines are instead collected in
-	// a tail ring and sent once the read finishes.
-	if !multi {
-		var ring []logLine
-		capped := !follow && nlines > 0
-		for {
-			select {
-			case <-ctx.Done():
+	s.rc.Flush()
+	return true
+}
+
+// streamSingle sends one file's lines as they arrive — a single file is
+// already in order. In view mode with an nlines cap, lines are instead
+// collected in a tail ring and sent once the read finishes.
+func streamSingle(ctx context.Context, s *sseStream, lines <-chan logLine, capped bool, nlines int) {
+	var ring []logLine
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ln, ok := <-lines:
+			if !ok {
+				if capped && len(ring) > nlines {
+					ring = ring[len(ring)-nlines:]
+				}
+				for _, ln := range ring {
+					if !s.writeLine(ln) {
+						return
+					}
+				}
+				// The file is fully read (view mode): tell the client so its
+				// EventSource closes instead of reconnecting.
+				s.event("eof")
 				return
-			case ln, ok := <-lines:
-				if !ok {
-					if capped && len(ring) > nlines {
-						ring = ring[len(ring)-nlines:]
-					}
-					for _, ln := range ring {
-						if !writeLine(ln) {
-							return
-						}
-					}
-					// The file is fully read (view mode): tell the client so
-					// its EventSource closes instead of reconnecting.
-					fmt.Fprint(w, "event: eof\ndata: \n\n")
-					rc.Flush()
-					return
+			}
+			if s.caughtUp(ln) {
+				continue
+			}
+			if !s.progress(ln.pos) {
+				return
+			}
+			if capped {
+				// Keep only the stream's tail, trimming in chunks so the cost
+				// stays amortized rather than per line.
+				if ring = append(ring, ln); len(ring) >= nlines+ringTrimChunk {
+					ring = append(ring[:0], ring[len(ring)-nlines:]...)
 				}
-				if caughtUp(ln) {
-					continue
-				}
-				if !progress(ln.pos) {
-					return
-				}
-				if capped {
-					// Keep only the stream's tail, trimming in chunks so the
-					// cost stays amortized rather than per line.
-					if ring = append(ring, ln); len(ring) >= nlines+ringTrimChunk {
-						ring = append(ring[:0], ring[len(ring)-nlines:]...)
-					}
-					continue
-				}
-				if !writeLine(ln) {
-					return
-				}
-				// Per-line flushing matters only when following live — during
-				// a bulk load it would mean a tiny packet per line. Bulk loads
-				// flush via the progress events and at EOF; in between, the
-				// response buffer streams larger loads on its own.
-				if catchingUp == 0 && len(lines) == 0 {
-					rc.Flush() // live and drained: push the line out now
-				}
+				continue
+			}
+			if !s.writeLine(ln) {
+				return
+			}
+			// Per-line flushing matters only when following live — during a
+			// bulk load it would mean a tiny packet per line. Bulk loads flush
+			// via the progress events and at EOF; in between, the response
+			// buffer streams larger loads on its own.
+			if s.catchingUp == 0 && len(lines) == 0 {
+				s.rc.Flush() // live and drained: push the line out now
 			}
 		}
 	}
+}
 
-	// Several files: merge them in timestamp order. Lines are buffered and
-	// flushed sorted every mergeInterval, which also orders the initial burst.
-	// A line with no recognizable timestamp inherits its file's last one, so
-	// multi-line entries stay together; failing that it sorts as "now".
+// streamMerged merges several files in timestamp order. Lines are buffered and
+// flushed sorted every mergeInterval, which also orders the initial burst. A
+// line with no recognizable timestamp inherits its file's last one, so
+// multi-line entries stay together; failing that it sorts as "now".
+func streamMerged(ctx context.Context, s *sseStream, lines <-chan logLine, nlines int) {
 	type timedLine struct {
 		logLine
 		ts time.Time
@@ -713,12 +723,12 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.SliceStable(buf, func(i, j int) bool { return buf[i].ts.Before(buf[j].ts) })
 		for _, ln := range buf {
-			if !writeLine(ln.logLine) {
+			if !s.writeLine(ln.logLine) {
 				return false
 			}
 		}
 		buf = buf[:0]
-		rc.Flush() // one flush per merge batch, not per line
+		s.rc.Flush() // one flush per merge batch, not per line
 		return true
 	}
 
@@ -726,8 +736,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	// stamper is primed from the file itself — the format from its trailing
 	// lines, and the last date before the backlog window, so a backlog that
 	// starts mid-entry (undated continuation lines) still inherits its entry's
-	// date instead of sorting as "now". A line with no timestamp inherits its
-	// file's previous one, so multi-line entries stay together.
+	// date instead of sorting as "now".
 	stampers := make(map[string]*timestamper)
 	timestamp := func(ln logLine) time.Time {
 		t := stampers[ln.path]
@@ -752,7 +761,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 				// them this channel — only wind down once ctx is cancelled.
 				return
 			}
-			if caughtUp(ln) {
+			if s.caughtUp(ln) {
 				continue
 			}
 			buf = append(buf, timedLine{ln, timestamp(ln)})

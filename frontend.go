@@ -1,27 +1,17 @@
 package main
 
-import (
-	"embed"
-	"io/fs"
-)
+import _ "embed"
 
-// frontendDist holds the frontend assets (one Go template, CSS and JS — three
-// flat files), embedded into the binary at build time. The frontend is plain
-// hand-written HTML/CSS/JS under ./frontend — there is no build step or
-// toolchain.
-//
-//go:embed frontend
-var frontendDist embed.FS
+// The frontend is plain hand-written HTML/CSS/JS under ./frontend — three flat
+// files, no build step or toolchain — each embedded into the binary directly.
+// main.html is a Go template rendered server-side (see indexHandler); the CSS
+// and JS are served verbatim (see setupRoutes).
 
-// frontendAssets is frontendDist rooted at the "frontend" directory, so the
-// files are addressed by bare name ("main.css", "tailon.html"), matching the
-// /vfs/ URLs and template paths the server uses.
-var frontendAssets = mustSub(frontendDist, "frontend")
+//go:embed frontend/main.html
+var indexHTML string
 
-func mustSub(fsys fs.FS, dir string) fs.FS {
-	sub, err := fs.Sub(fsys, dir)
-	if err != nil {
-		panic(err)
-	}
-	return sub
-}
+//go:embed frontend/main.css
+var mainCSS []byte
+
+//go:embed frontend/main.js
+var mainJS []byte

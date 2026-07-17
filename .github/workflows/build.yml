@@ -1,20 +1,23 @@
-name: build
+# Release pipeline, triggered by pushing a v* tag. release.sh drives it and
+# polls this workflow by its file name (build.yml) — keep the name if you
+# rename anything. Two independent jobs: the release binaries and the
+# multi-arch container image; the release is only "ready" when both succeed.
+name: release
 
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-
 jobs:
-  build:
+  binaries:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: stable
 
@@ -33,3 +36,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/tailon-ng-*
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Git tags are plain increments (v1, v2, …), so each image is tagged with
+      # the bare number plus "latest" (the metadata action's default flavor).
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=match,pattern=v(\d+),group=1
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both platforms exist in distroless "static"; it also ships arm/v7,
+      # ppc64le, s390x and riscv64 should more ever be wanted. The Go build
+      # stage cross-compiles on the build host, so no emulation is involved.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

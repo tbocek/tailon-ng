@@ -394,7 +394,7 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 "use strict";
 
 // Tailon-ng frontend: framework-free vanilla JavaScript. It fetches the file list
-// and streams lines over Server-Sent Events. Modes: "tail" (follow) and "grep"
+// and streams lines over Server-Sent Events. Modes: "tail" (follow) and "view"
 // (whole file), both with a browser-side regexp search that highlights
 // matching lines; "find" greps server-side. Injected global: relativeRoot.
 
@@ -405,7 +405,7 @@ const DEMO = typeof window !== "undefined" && window.DEMO === true;
 // "tail" follows live files; "find" searches the selection server-side for
 // the first matches per file with context — bounded and fast on any file
 // size (the ☰ menu's "find in archives" widens it to rotated archives —
-// .gz, .1, … — decoded server-side). "view" (wire value "grep") shows a
+// .gz, .1, … — decoded server-side). "view" shows a
 // whole file: it is also what clicking a find result or a line's file prefix
 // opens. In tail and view the input is a browser-side search that highlights
 // matches as you type without hiding lines (see searchApply). View works on
@@ -414,7 +414,7 @@ const DEMO = typeof window !== "undefined" && window.DEMO === true;
 const MODES = [
     { value: "tail", label: "tail" },
     { value: "find", label: "find" },
-    { value: "grep", label: "view" },
+    { value: "view", label: "view" },
 ];
 const TAIL_LINES = 10; // trailing lines shown when a tail starts
 const MAX_LINES = 50000; // scrollback cap: lines kept here, and the most a view requests
@@ -485,7 +485,7 @@ const MAX_CACHE_VIEWS = 20;
 const cache = new Map(); // key -> { lines: [], offset: -1, done: false }
 
 function cacheEntry() {
-    // Only tail and view (wire value "grep") reach here; find renders results,
+    // Only tail and view reach here; find renders results,
     // not a line stream, and never caches. Streams are always unfiltered
     // (searching happens in the browser), so every search shares one copy.
     const key = JSON.stringify([state.file.path, state.mode]);
@@ -618,7 +618,7 @@ function appendAnsi(parent, text) {
 // Log view: append-only lines, auto-scrolling while you're at the bottom.
 // Rendering is batched per animation frame: incoming lines queue in `pending`
 // and flush as one DocumentFragment with a single scroll check. The naive way —
-// append and scroll-check per line — forces a reflow for every line, and grep
+// append and scroll-check per line — forces a reflow for every line, and a view
 // delivers tens of thousands of lines per second; likewise, trimming the
 // scrollback with shift()/removeChild per line costs O(buffer) per line once
 // the cap is reached. Batching plus chunked splicing keeps both amortized.
@@ -642,7 +642,7 @@ const logview = {
     // layout at the bottom instead.
     pinBottom: function () { this.anchor.scrollIntoView({ block: "end" }); },
     locate: null, // raw text to find, select and scroll to (set by jumpToFile)
-    // While a grep loads, the view stays put — no per-frame bottom-sticking,
+    // While a view loads, the view stays put — no per-frame bottom-sticking,
     // which costs a forced layout per frame on a large scrollback. A sweep
     // under the toolbar shows progress and EOF jumps to the bottom once,
     // unless the user started scrolling (reading) during the load.
@@ -658,7 +658,7 @@ const logview = {
         searchReset(); // the highlighted spans are gone with the rest
     },
     // write queues one line; path (set in multi-file streams) becomes a
-    // clickable prefix that jumps to grepping just that file (one delegated
+    // clickable prefix that jumps to viewing just that file (one delegated
     // click listener in init handles all of them — no per-line closure).
     write: function (path, text) {
         this.pending.push({ path: path, text: text });
@@ -751,7 +751,7 @@ function updateFilterHints() {
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
         : "Browser-side: searches the lines loaded in this view" +
-        (state.mode === "grep" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
+        (state.mode === "view" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
     // The find-shape selects appear only in find mode; matches-per-file only
@@ -824,7 +824,7 @@ function connect(locate) {
         // appended bytes from there on (files are append-only). Archives stay
         // a read-once (they never grow, and EOF marks their cache complete),
         // and so does a view with the ☰ menu's "live view" turned off.
-        if (state.mode === "grep" && !state.file.stale && settings.live) p.set("mode", "tail");
+        if (state.mode === "view" && !state.file.stale && settings.live) p.set("mode", "tail");
     }
 
     setStatus("connecting…");
@@ -859,7 +859,7 @@ function connect(locate) {
         el["loading"].style.backgroundSize = Math.min(100, Math.round(p.d * 100 / p.t)) + "% 100%";
     });
     src.addEventListener("live", function () {
-        if (state.mode === "grep") {
+        if (state.mode === "view") {
             // A live view: the backlog is rendered and the stream now follows.
             // Settle exactly like an EOF would — locate, search, landing.
             logview.flush();
@@ -1026,7 +1026,7 @@ let countTimer = 0, countSeq = 0;
 function scheduleFileCount() {
     clearTimeout(countTimer);
     search.fileTotal = null;
-    if (DEMO || state.mode !== "grep" || !state.file || state.file.all || state.file.local || !search.re) return;
+    if (DEMO || state.mode !== "view" || !state.file || state.file.all || state.file.local || !search.re) return;
     const seq = ++countSeq;
     const q = search.applied;
     const path = state.file.path;
@@ -1049,7 +1049,7 @@ function scheduleFileCount() {
     }, 600);
 }
 
-function searchableMode() { return state.mode === "tail" || state.mode === "grep"; }
+function searchableMode() { return state.mode === "tail" || state.mode === "view"; }
 
 function searchReset() {
     search.gen++; // cancels an in-flight pass; the DOM it worked on is gone
@@ -1255,7 +1255,7 @@ function jumpToFile(path, text) {
     if (i < 0) return;
     el["file-select"].value = String(i);
     state.file = state.files[i];
-    state.mode = "grep"; // "view": the complete file (syncModeOptions syncs the select)
+    state.mode = "view"; // "view": the complete file (syncModeOptions syncs the select)
     // Keep the query: a view hides nothing, so a find's search carries over
     // and its matches arrive already highlighted (viewSettled lands on the
     // clicked line, or the first match when it is gone).
@@ -1283,10 +1283,10 @@ function syncModeOptions() {
     el["mode-select"].options[0].disabled = !!single; // options[0] is "tail"
     el["mode-select"].options[1].disabled = !!local || DEMO; // "find" is server-side — use the search box
     el["mode-select"].options[2].disabled = !!group; // options[2] is "view"
-    if (DEMO && state.mode === "find") state.mode = "grep";
-    if (local) state.mode = "grep";
-    if (single && state.mode === "tail") state.mode = "grep";
-    if (group && state.mode === "grep") state.mode = "tail";
+    if (DEMO && state.mode === "find") state.mode = "view";
+    if (local) state.mode = "view";
+    if (single && state.mode === "tail") state.mode = "view";
+    if (group && state.mode === "view") state.mode = "tail";
     el["mode-select"].value = state.mode;
 }
 
@@ -1495,8 +1495,8 @@ function init() {
     });
 
     // One delegated listener serves every line (logview.flush attaches no
-    // per-line handlers). A plain click on the path prefix jumps to grepping
-    // that file — carrying the line's text so the grep view scrolls to it; with
+    // per-line handlers). A plain click on the path prefix jumps to viewing
+    // that file — carrying the line's text so the view scrolls to it; with
     // a modifier held it selects instead (jumping mid-range-select would jar).
     // Clicks select: plain click highlights just that line (again to clear),
     // ctrl+click toggles lines individually, shift+click selects the range from
@@ -1652,7 +1652,7 @@ function init() {
     el["cfg-live"].onchange = function () {
         settings.live = el["cfg-live"].checked;
         saveSettings();
-        if (state.mode === "grep") connect(); // reconnect: follow, or stop following
+        if (state.mode === "view") connect(); // reconnect: follow, or stop following
     };
 
     refreshFiles().then(function () { updateDownload(); connect(); });

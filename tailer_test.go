@@ -43,7 +43,7 @@ func TestLastLinesWindowScales(t *testing.T) {
 		t.Fatal(err)
 	}
 	const total = 5000 // ~600KB, comfortably past 256KB
-	for i := 0; i < total; i++ {
+	for i := range total {
 		fmt.Fprintf(f, "line %05d with some padding to reach realistic length %060d\n", i, i)
 	}
 	f.Close()
@@ -56,31 +56,24 @@ func TestLastLinesWindowScales(t *testing.T) {
 	}
 }
 
-func TestDetectLayout(t *testing.T) {
-	// A file consistently in ISO "space" format (with a continuation line that
-	// has no timestamp). The format is chosen across the lines, not from one.
-	iso := []string{
-		"2026-06-29 17:48:12 started",
-		"2026-06-29 17:48:13 working",
-		"    ... continuation line, no timestamp",
-		"2026-06-29 17:48:14 done",
-	}
-	if got := detectLayout(iso); got != "2006-01-02 15:04:05.999999999" {
-		t.Errorf("ISO: detected %q", got)
+func TestStamp(t *testing.T) {
+	ts := &timestamper{}
+
+	// The first dated line picks the layout.
+	first := ts.stamp("2026-06-29 17:48:12 started")
+	if ts.layout != "2006-01-02 15:04:05.999999999" {
+		t.Fatalf("layout = %q", ts.layout)
 	}
 
-	// Syslog (RFC 3164).
-	syslog := []string{
-		"Jun 29 17:48:12 host app: up",
-		"Jun 29 17:48:13 host app: ok",
-	}
-	if got := detectLayout(syslog); got != "Jan 2 15:04:05" {
-		t.Errorf("syslog: detected %q", got)
+	// An undated continuation line inherits the previous timestamp.
+	if got := ts.stamp("    ... continuation line, no timestamp"); !got.Equal(first) {
+		t.Fatalf("continuation stamped %v, want %v", got, first)
 	}
 
-	// No timestamps at all.
-	if got := detectLayout([]string{"hello", "world"}); got != "" {
-		t.Errorf("none: detected %q", got)
+	// Nothing is locked in: a line in another format switches the layout.
+	ts.stamp("Jun 29 17:48:13 host app: ok")
+	if ts.layout != "Jan 2 15:04:05" {
+		t.Fatalf("layout after syslog line = %q", ts.layout)
 	}
 }
 
@@ -106,7 +99,7 @@ func TestPrimeTimestamper(t *testing.T) {
 	if ts.layout != "2006-01-02 15:04:05.999999999" {
 		t.Fatalf("layout = %q", ts.layout)
 	}
-	want, _ := matchAny("2026-06-29 17:05:00")
+	want, _ := matchLayout(ts.layout, "2026-06-29 17:05:00")
 	if !ts.last.Equal(want) {
 		t.Fatalf("last = %v, want %v", ts.last, want)
 	}
@@ -114,13 +107,13 @@ func TestPrimeTimestamper(t *testing.T) {
 		t.Fatalf("undated backlog line stamped %v, want the primed %v", got, want)
 	}
 
-	// A file with no timestamps at all locks "none": stamping falls back to
+	// A file with no timestamps at all primes nothing: stamping falls back to
 	// time.Now — ordering by arrival, never displayed.
 	np := filepath.Join(dir, "n.log")
 	if err := os.WriteFile(np, []byte("plain\nlines\nonly\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if ts := primeTimestamper(np, 2); ts.layout != "none" || !ts.last.IsZero() {
+	if ts := primeTimestamper(np, 2); ts.layout != "" || !ts.last.IsZero() {
 		t.Fatalf("undated file: layout=%q last=%v", ts.layout, ts.last)
 	}
 
@@ -130,7 +123,7 @@ func TestPrimeTimestamper(t *testing.T) {
 	}
 }
 
-func TestMatchAny(t *testing.T) {
+func TestStampLayouts(t *testing.T) {
 	cases := []struct {
 		line  string
 		match bool
@@ -145,8 +138,10 @@ func TestMatchAny(t *testing.T) {
 		{"just a plain log line without a date", false}, // no timestamp
 	}
 	for _, c := range cases {
-		if _, ok := matchAny(c.line); ok != c.match {
-			t.Errorf("matchAny(%q) = %v, want %v", c.line, ok, c.match)
+		ts := &timestamper{}
+		ts.stamp(c.line)
+		if matched := ts.layout != ""; matched != c.match {
+			t.Errorf("stamp(%q) matched = %v, want %v", c.line, matched, c.match)
 		}
 	}
 }

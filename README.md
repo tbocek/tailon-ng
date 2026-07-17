@@ -90,7 +90,8 @@ docker run --rm -p 127.0.0.1:8080:8080 -v /var/log:/var/log:ro \
   ghcr.io/tbocek/tailon-ng:latest /var/log
 ```
 
-`:latest` is the newest release, `:X.Y.Z`/`:X.Y` pin a version. The image is
+`:latest` is the newest release; `:N` (e.g. `:9`) pins one — image tags mirror
+the plain-increment git tags (v1, v2, …). The image is
 built `FROM` [distroless] `static` — just the static binary, no shell or
 package manager. It runs as root so it can read root-owned system logs (such as
 `/var/log/syslog`) out of the box; to drop privileges when you only serve logs
@@ -139,12 +140,11 @@ linking to the releases page. All toggles and settings persist in the browser
 
 To get started, run tailon-ng with the files or directories you want to monitor.
 Each argument is a file, a directory, or a shell glob — `*` matches within a
-directory and `**` across them — and a single argument can list several,
-comma-separated:
+directory and `**` across them:
 
 ```
 tailon-ng /var/log/apache/access.log /var/log/apache/error.log /var/log/messages
-tailon-ng /var/log/apache/,/var/log/nginx/
+tailon-ng /var/log/apache/ /var/log/nginx/
 tailon-ng "/var/log/**.log"
 ```
 
@@ -243,7 +243,7 @@ Tailon-ng is configured entirely through command-line flags.
 Each <path> is a file, a directory, or a shell glob, where "*" matches within a
 directory and "**" across them (so "/var/log/**.log" finds .log files at any
 depth). Directories are served recursively, and new files are picked up as they
-appear. Several paths can be given as separate arguments or comma-separated.
+appear. Several paths can be given as separate arguments.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
 but excluded from live tailing. With "find in archives" enabled (web UI, in the
@@ -255,7 +255,7 @@ filesystems without notification support, tailon-ng falls back to polling.
 
 Example usage:
   tailon-ng /var/log/syslog /var/log/auth.log
-  tailon-ng /var/log/nginx/,/var/log/apache/
+  tailon-ng /var/log/nginx/ /var/log/apache/
   tailon-ng /var/log/remote/
   tailon-ng "/var/log/**.log"
   tailon-ng -b 127.0.0.1:8080 /var/log/messages
@@ -284,9 +284,9 @@ can't be rendered as script in your browser.
 ### Frontend
 
 The frontend is plain, framework-free HTML, CSS and JavaScript: three flat files
-in `frontend/` (one Go template `tailon.html`, `main.css`, `main.js`), embedded
+in `frontend/` (one Go template `main.html`, `main.css`, `main.js`), embedded
 into the binary at compile time with `//go:embed` (see `frontend.go`). The
-favicon is an inline SVG data URI in `tailon.html` — no image files at all. There is no build
+favicon is an inline SVG data URI in `main.html` — no image files at all. There is no build
 step or toolchain — edit the files directly and rebuild the binary. The UI
 talks to the backend over Server-Sent Events.
 

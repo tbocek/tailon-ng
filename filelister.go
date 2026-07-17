@@ -41,51 +41,48 @@ var (
 // at any depth.
 func createListing(sources []string) []*ListEntry {
 	files := make(map[string]bool)
-	var res []*ListEntry
-	add := func(p string) {
-		if files[p] {
-			return
-		}
-		files[p] = true
-		res = append(res, &ListEntry{Path: p, Stale: isStale(p)})
-	}
-	// addPath serves one path: a directory is walked recursively, anything else
-	// is added as a single file (which need not exist yet).
-	addPath := func(p string) {
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			filepath.WalkDir(p, func(q string, d os.DirEntry, err error) error {
-				if err == nil && !d.IsDir() {
-					add(q)
-				}
-				return nil
-			})
-		} else {
-			add(p)
-		}
-	}
-
 	for _, src := range sources {
 		switch {
 		case strings.Contains(src, "**"):
 			for _, m := range globStar(src) { // recursive glob; matches files only
-				add(m)
+				files[m] = true
 			}
 		case strings.ContainsAny(src, "*?["):
-			matches, _ := filepath.Glob(src) // single-level glob
+			matches, _ := filepath.Glob(src) // single-level glob; can match a directory
 			for _, m := range matches {
-				addPath(m)
+				addTree(files, m)
 			}
 		default:
-			addPath(src)
+			addTree(files, src)
 		}
 	}
 
+	res := make([]*ListEntry, 0, len(files))
+	for p := range files {
+		res = append(res, &ListEntry{Path: p, Stale: isStale(p)})
+	}
 	sort.Slice(res, func(i, j int) bool { return res[i].Path < res[j].Path })
 
 	allFilesMu.Lock()
 	allFiles = files
 	allFilesMu.Unlock()
 	return res
+}
+
+// addTree adds one served path to files: a directory is walked recursively,
+// anything else is a single file (which need not exist yet).
+func addTree(files map[string]bool, p string) {
+	info, err := os.Stat(p)
+	if err != nil || !info.IsDir() {
+		files[p] = true
+		return
+	}
+	filepath.WalkDir(p, func(q string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files[q] = true
+		}
+		return nil
+	})
 }
 
 // globStar expands a glob containing "**" into matching file paths. filepath.Glob
@@ -170,30 +167,20 @@ func fileAllowed(path string) bool {
 	return ok
 }
 
-// allowedFiles returns the sorted list of all served files. It backs the "all
-// files" stream mode, which tails every file at once.
-func allowedFiles() []string {
+// allowedFiles returns the sorted served files whose path starts with prefix.
+// "" selects everything (the "all files" mode); a directory (the client sends
+// "dir/") or any path prefix such as ".../192.168.1" scopes to a group of
+// hosts, or a file together with its rotated archives. Filtering the existing
+// allowlist keeps it safe — no path outside the served set can match.
+func allowedFiles(prefix string) []string {
 	allFilesMu.RLock()
 	names := make([]string, 0, len(allFiles))
 	for p := range allFiles {
-		names = append(names, p)
+		if strings.HasPrefix(p, prefix) {
+			names = append(names, p)
+		}
 	}
 	allFilesMu.RUnlock()
 	sort.Strings(names)
 	return names
-}
-
-// allowedUnder returns the served files whose path starts with prefix — a
-// directory (the client sends "dir/") or any path prefix such as
-// ".../192.168.1", so a group of hosts, or a file together with its rotated
-// archives, scope the same way. Filtering the existing allowlist keeps it
-// safe — no path outside the served set can match.
-func allowedUnder(prefix string) []string {
-	var sel []string
-	for _, p := range allowedFiles() {
-		if strings.HasPrefix(p, prefix) {
-			sel = append(sel, p)
-		}
-	}
-	return sel
 }

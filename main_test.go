@@ -7,14 +7,6 @@ import (
 	"testing"
 )
 
-func TestGatherSources(t *testing.T) {
-	got := gatherSources([]string{"/a/b/c", "/d,/e", "  /f , /g  ", ""})
-	want := []string{"/a/b/c", "/d", "/e", "/f", "/g"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("gatherSources = %q, want %q", got, want)
-	}
-}
-
 func TestIsStale(t *testing.T) {
 	cases := []struct {
 		path  string
@@ -49,9 +41,9 @@ func paths(entries []*ListEntry) []string {
 }
 
 func TestListingFiles(t *testing.T) {
-	lst := createListing([]string{"testdata/ex1/var/log/2.log", "testdata/ex1/var/log/1.log"})
+	lst := createListing([]string{"testdata/var/log/2.log", "testdata/var/log/1.log"})
 	// Listing is path-sorted, so 1.log comes before 2.log regardless of order.
-	want := []string{"testdata/ex1/var/log/1.log", "testdata/ex1/var/log/2.log"}
+	want := []string{"testdata/var/log/1.log", "testdata/var/log/2.log"}
 	if got := paths(lst); !reflect.DeepEqual(got, want) {
 		t.Fatalf("paths = %q, want %q", got, want)
 	}
@@ -61,17 +53,21 @@ func TestListingFiles(t *testing.T) {
 }
 
 func TestListingDir(t *testing.T) {
-	lst := createListing([]string{"testdata/ex1/var/log/"})
-	if len(lst) != 4 {
-		t.Fatalf("expected 4 files served recursively, got %d: %q", len(lst), paths(lst))
+	lst := createListing([]string{"testdata/var/log/"})
+	if len(lst) != 5 {
+		t.Fatalf("expected 5 files served recursively, got %d: %q", len(lst), paths(lst))
 	}
-	if !fileAllowed("testdata/ex1/var/log/1.log") {
+	if !fileAllowed("testdata/var/log/1.log") {
 		t.Fatal("expected 1.log to be allowed after the directory walk")
+	}
+	// The rotated archive is listed, but as stale: excluded from live tailing.
+	if lst[1].Path != "testdata/var/log/1.log.1.gz" || !lst[1].Stale {
+		t.Fatalf("expected 1.log.1.gz to be listed stale, got %+v", lst[1])
 	}
 }
 
 func TestListingGlob(t *testing.T) {
-	lst := createListing([]string{"testdata/ex1/var/log/*.log"})
+	lst := createListing([]string{"testdata/var/log/*.log"})
 	if len(lst) != 4 {
 		t.Fatalf("glob expanded to %d files, want 4: %q", len(lst), paths(lst))
 	}

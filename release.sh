@@ -39,7 +39,7 @@ echo "$new_tag"
 # So one call every ${SLEEP}s for the run status, and only once the build
 # succeeds a single call to confirm the assets. On a rate limit we abort loudly.
 EXPECTED=4   # linux amd64/arm64 + darwin amd64/arm64
-RETRIES=20
+RETRIES=30   # the run now includes the multi-arch image build; allow it time
 SLEEP=10
 sha="$(git rev-list -n1 "$new_tag")"
 REL_URL="https://api.github.com/repos/tbocek/tailon-ng/releases/tags/$new_tag"

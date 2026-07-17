@@ -4,8 +4,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -22,7 +23,7 @@ Tailon-ng is configured entirely through command-line flags.
 Each <path> is a file, a directory, or a shell glob, where "*" matches within a
 directory and "**" across them (so "/var/log/**.log" finds .log files at any
 depth). Directories are served recursively, and new files are picked up as they
-appear. Several paths can be given as separate arguments or comma-separated.
+appear. Several paths can be given as separate arguments.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
 but excluded from live tailing. With "find in archives" enabled (web UI, in the
@@ -34,7 +35,7 @@ filesystems without notification support, tailon-ng falls back to polling.
 
 Example usage:
   tailon-ng /var/log/syslog /var/log/auth.log
-  tailon-ng /var/log/nginx/,/var/log/apache/
+  tailon-ng /var/log/nginx/ /var/log/apache/
   tailon-ng /var/log/remote/
   tailon-ng "/var/log/**.log"
   tailon-ng -b 127.0.0.1:8080 /var/log/messages
@@ -43,21 +44,6 @@ Example usage:
 const scriptOptions = `  -b, --bind string            Address and port to listen on (default ":8080")
   -h, --help                   Show this help message and exit
   -r, --relative-root string   Webapp relative root (default "/")`
-
-// gatherSources flattens the positional command-line arguments into a list of
-// paths. Each argument may itself be a comma-separated list, so "tailon-ng a b"
-// and "tailon-ng a,b" name the same two sources.
-func gatherSources(args []string) []string {
-	var sources []string
-	for _, arg := range args {
-		for _, s := range strings.Split(arg, ",") {
-			if s = strings.TrimSpace(s); s != "" {
-				sources = append(sources, s)
-			}
-		}
-	}
-	return sources
-}
 
 // version is stamped by the release build via -ldflags "-X main.version=vN"
 // (see .github/workflows/build.yml), so the UI always shows the tag it was
@@ -117,39 +103,55 @@ func main() {
 	config.RelativeRoot = "/" + strings.TrimLeft(config.RelativeRoot, "/")
 	config.RelativeRoot = strings.TrimRight(config.RelativeRoot, "/") + "/"
 
-	config.Sources = gatherSources(flag.Args())
+	// Each positional argument is one path, taken verbatim (commas and spaces
+	// are legal in filenames); empty arguments are skipped.
+	for _, arg := range flag.Args() {
+		if arg != "" {
+			config.Sources = append(config.Sources, arg)
+		}
+	}
 	if len(config.Sources) == 0 {
 		fmt.Fprintln(os.Stderr, "No paths specified on the command-line")
 		os.Exit(2)
 	}
 
-	log.Print("Generate initial file listing")
+	slog.Info("generating initial file listing")
 	createListing(config.Sources)
 
 	startServer(config, config.BindAddr)
 }
 
 // startServer serves forever on bindAddr — a TCP "host:port" address, or a
-// filesystem path to bind a unix socket (useful behind a reverse proxy).
+// filesystem path to bind a unix socket (useful behind a reverse proxy). It
+// only returns to exit the process: there is no graceful-shutdown path, so
+// Serve coming back always means failure.
 func startServer(config *Config, bindAddr string) {
-	logger := log.New(os.Stdout, "", log.LstdFlags)
-	logger.Printf("Server start, relative-root: %s, bind-addr: %s\n", config.RelativeRoot, bindAddr)
+	slog.Info("server start", "relative-root", config.RelativeRoot, "bind-addr", bindAddr)
 
-	server := setupServer(config, bindAddr, logger)
+	server := setupServer(config, bindAddr)
 
+	var err error
 	if strings.Contains(bindAddr, ":") {
-		server.ListenAndServe()
+		err = server.ListenAndServe()
 	} else {
-		os.Remove(bindAddr)
-
-		unixAddr, _ := net.ResolveUnixAddr("unix", bindAddr)
-		unixListener, err := net.ListenUnix("unix", unixAddr)
-		if err != nil {
-			panic(err)
-		}
-		unixListener.SetUnlinkOnClose(true)
-
-		defer unixListener.Close()
-		server.Serve(unixListener)
+		err = serveUnix(server, bindAddr)
 	}
+	slog.Error("server failed", "err", err)
+	os.Exit(1)
+}
+
+// serveUnix serves on a unix socket at path. The socket file is removed again
+// when the listener closes (net's default for sockets it creates).
+func serveUnix(server *http.Server, path string) error {
+	// Remove a stale socket left by an unclean shutdown — binding over an
+	// existing file fails with "address already in use".
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	return server.Serve(listener)
 }
