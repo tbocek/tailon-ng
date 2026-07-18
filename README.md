@@ -285,7 +285,7 @@ the source of the recurring "wait, which tailon?" confusion:
 ## AI Usage
 
 I view AI LLMs as a tool to help write faster and better code. AI assistants
-(Opus/Fable/Qwen/Gemma) wrote a substantial part of this tool. I question the 
+(Opus/Fable/Qwen/Gemma) wrote a good part of this tool. I reviewed and questioned the 
 code piece by piece, the assistant explains, simplifies or fixes. The design 
 calls and the final review stay with me, and every change is backed by 
 tests (`go test -race ./...`). This tool is currently used in production.
