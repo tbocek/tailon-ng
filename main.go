@@ -144,8 +144,16 @@ func startServer(config *Config, bindAddr string) {
 // when the listener closes (net's default for sockets it creates).
 func serveUnix(server *http.Server, path string) error {
 	// Remove a stale socket left by an unclean shutdown — binding over an
-	// existing file fails with "address already in use".
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	// existing file fails with "address already in use". Only ever remove a
+	// socket: a typo'd -b must not delete a regular file.
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("refusing to bind %q: it exists and is not a socket", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	listener, err := net.Listen("unix", path)

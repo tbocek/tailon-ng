@@ -24,6 +24,9 @@ func TestIsStale(t *testing.T) {
 		{"/var/log/app.log.zst", true},
 		{"/var/log/app.log.old", true},
 		{"/var/log/app.log.bak", true},
+		{"/var/log/remote/192.168.1.5", false}, // per-host file, no extension
+		{"/var/log/backup.2025", false},        // a year is not a rotation counter
+		{"/var/log/app.log.1234", false},       // rotation counters are ≤ 3 digits
 	}
 	for _, c := range cases {
 		if got := isStale(c.path); got != c.stale {
@@ -80,6 +83,25 @@ func TestListingSkipsBinary(t *testing.T) {
 	}
 	if fileAllowed(filepath.Join(dir, "wtmp")) {
 		t.Fatal("binary file must not be in the allowlist")
+	}
+}
+
+func TestListingSymlinkDir(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "a.log"), []byte("2026-07-18 x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "current")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	lst := createListing([]string{link})
+	if len(lst) != 1 || filepath.Base(lst[0].Path) != "a.log" {
+		t.Fatalf("symlinked dir: got %q, want a.log", paths(lst))
 	}
 }
 

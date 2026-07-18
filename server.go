@@ -17,7 +17,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -370,13 +369,12 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 		defer closeDecoder(rd)
 	}
 
-	br := bufio.NewReader(rd)
+	br := bufio.NewReaderSize(rd, 64*1024)
 	for i := 0; ; i++ {
 		if i%1024 == 0 && ctx.Err() != nil {
 			return
 		}
-		line, err := br.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
+		line, err := readLine(br) // bounded: over-long lines arrive in pieces
 		if (line != "" || err == nil) && !fn(line) {
 			return
 		}
@@ -441,6 +439,10 @@ func countInFile(ctx context.Context, path string, re *regexp.Regexp, invert boo
 // mergeInterval is how often all-files mode flushes its buffer of lines, sorted
 // by timestamp, so several files are interleaved chronologically.
 const mergeInterval = 200 * time.Millisecond
+
+// sseHeartbeat is how often a quiet stream writes an SSE comment frame, so
+// proxies with idle timeouts (nginx defaults to 60s) keep the connection open.
+const sseHeartbeat = 25 * time.Second
 
 // ringTrimChunk is how much slack a capped view's tail ring accumulates before
 // it is trimmed back to the cap in one copy.
@@ -521,13 +523,18 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resume support (single-file streams only): the client sends the byte
-	// offset it has cached up to. A file smaller than that offset was truncated
-	// or replaced, so the cache is invalid — signal reset and start over.
+	// offset it has cached up to, plus the file identity it read it from (the
+	// "event: id" frame below). The cache is invalid — signal reset and start
+	// over — when the file shrank below the offset, or when a different file
+	// lives at the path now: a rotated-in replacement may already have grown
+	// past the offset, so size alone cannot tell.
 	start, reset := int64(-1), false
 	if v := query.Get("offset"); v != "" && len(paths) == 1 {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
 			start = n
-			if fi, err := os.Stat(paths[0]); err != nil || fi.Size() < start {
+			fi, err := os.Stat(paths[0])
+			if err != nil || fi.Size() < start ||
+				(query.Get("id") != "" && query.Get("id") != fileID(fi)) {
 				start, reset = -1, true
 			}
 		}
@@ -549,6 +556,15 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rc.Flush()
 
+	// A single-file stream announces the file's identity first: the client
+	// stores it with its cached offset and echoes it on resume (see above).
+	if !s.multi {
+		if fi, err := os.Stat(paths[0]); err == nil {
+			if id := fileID(fi); id != "" {
+				fmt.Fprintf(w, "event: id\ndata: %s\n\n", id)
+			}
+		}
+	}
 	if reset {
 		s.event("reset")
 	}
@@ -585,7 +601,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	if s.multi {
 		streamMerged(ctx, s, lines, nlines)
 	} else {
-		streamSingle(ctx, s, lines, !follow && nlines > 0, nlines)
+		streamSingle(ctx, s, lines, !follow && nlines > 0, nlines, paths[0])
 	}
 }
 
@@ -639,6 +655,29 @@ func (s *sseStream) caughtUp(ln logLine) bool {
 	return true
 }
 
+// reset tells the client to drop everything it holds for this stream — the
+// file at path was rotated or truncated mid-stream — and announces the
+// identity of the file that lives there now.
+func (s *sseStream) reset(path string) {
+	s.event("reset")
+	if fi, err := os.Stat(path); err == nil {
+		if id := fileID(fi); id != "" {
+			fmt.Fprintf(s.w, "event: id\ndata: %s\n\n", id)
+			s.rc.Flush()
+		}
+	}
+}
+
+// heartbeat writes an SSE comment frame, which EventSource ignores; false
+// means the client is gone.
+func (s *sseStream) heartbeat() bool {
+	if _, err := fmt.Fprint(s.w, ": hb\n\n"); err != nil {
+		return false
+	}
+	s.rc.Flush()
+	return true
+}
+
 // progress advances the gauge to pos and emits an SSE progress frame when it
 // crosses a new percent; false means the client is gone.
 func (s *sseStream) progress(pos int64) bool {
@@ -655,12 +694,18 @@ func (s *sseStream) progress(pos int64) bool {
 // streamSingle sends one file's lines as they arrive — a single file is
 // already in order. In view mode with an nlines cap, lines are instead
 // collected in a tail ring and sent once the read finishes.
-func streamSingle(ctx context.Context, s *sseStream, lines <-chan logLine, capped bool, nlines int) {
+func streamSingle(ctx context.Context, s *sseStream, lines <-chan logLine, capped bool, nlines int, path string) {
+	hb := time.NewTicker(sseHeartbeat)
+	defer hb.Stop()
 	var ring []logLine
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-hb.C:
+			if !s.heartbeat() {
+				return
+			}
 		case ln, ok := <-lines:
 			if !ok {
 				if capped && len(ring) > nlines {
@@ -675,6 +720,10 @@ func streamSingle(ctx context.Context, s *sseStream, lines <-chan logLine, cappe
 				// EventSource closes instead of reconnecting.
 				s.event("eof")
 				return
+			}
+			if ln.pos == posReset {
+				s.reset(path) // rotated/truncated: the client starts over
+				continue
 			}
 			if s.caughtUp(ln) {
 				continue
@@ -747,10 +796,16 @@ func streamMerged(ctx context.Context, s *sseStream, lines <-chan logLine, nline
 		return t.stamp(ln.text)
 	}
 
+	hb := time.NewTicker(sseHeartbeat)
+	defer hb.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-hb.C:
+			if !s.heartbeat() {
+				return
+			}
 		case <-ticker.C:
 			if !flush() {
 				return
@@ -760,6 +815,9 @@ func streamMerged(ctx context.Context, s *sseStream, lines <-chan logLine, nline
 				// Aggregate streams always follow, so the readers — and with
 				// them this channel — only wind down once ctx is cancelled.
 				return
+			}
+			if ln.pos == posReset {
+				continue // one rotated file must not wipe a merged view
 			}
 			if s.caughtUp(ln) {
 				continue

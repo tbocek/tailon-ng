@@ -20,11 +20,35 @@ import (
 // pollInterval is how often follow mode checks a file for newly appended data.
 const pollInterval = 250 * time.Millisecond
 
+// maxLineBytes bounds how much of an unterminated line is held back waiting
+// for its newline. A newline-free file (a giant single-line dump — text, so
+// the binary sniff passes it) would otherwise buffer whole; past the cap it
+// is emitted in pieces, the affordable failure for pathological input.
+const maxLineBytes = 1 << 20
+
+// readLine returns the next line from br without its terminator. A line
+// longer than br's buffer comes back in buffer-sized pieces (with err nil),
+// bounding memory the same way.
+func readLine(br *bufio.Reader) (string, error) {
+	line, err := br.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		return string(line), nil
+	}
+	return strings.TrimRight(string(line), "\r\n"), err
+}
+
 // posCaughtUp, sent once per followed file as a line's pos, marks the end of
 // its initial catch-up read: from here on, only newly appended data follows.
 // The server turns the last one into an SSE "live" event so the client can
 // hide its loading bar.
 const posCaughtUp = -2
+
+// posReset, sent as a line's pos, marks that the file was rotated or truncated
+// and the stream restarts from the start of whatever lives at the path now.
+// For a single-file stream the server turns it into an SSE "reset" so the
+// client drops what it shows — the new file replaces the old one instead of
+// being stitched underneath content that no longer exists.
+const posReset = -3
 
 // streamFile sends each line of the file at path to send, along with the byte
 // offset just past that line (-1 when unknown) — the client caches lines and
@@ -101,21 +125,20 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 
 		if info, err := f.Stat(); err == nil {
 			if prev != nil && !os.SameFile(info, prev) {
-				// Rotation: a different file lives at path now; start it fresh.
+				// Rotation: a different file lives at path now. Start over and
+				// show it — never stitch it under the old one's lines.
+				send("", posReset)
 				offset = 0
 				partial = nil
 				if w != nil {
 					w.rewatch() // the watch followed the old inode; re-attach by path
 				}
 			} else if info.Size() < offset {
-				// Truncation. Served files are treated as append-only — the
-				// resume/cache design builds on that — so a shrunk file is not
-				// re-read: skip to its new end, keep following, leave a
-				// warning. (copytruncate rotation lands here with size ~0, so
-				// fresh lines still stream from the top.)
-				slog.Warn("file shrank; skipping to its new end",
+				// Truncation: the content shown no longer exists; same story.
+				slog.Warn("file shrank; restarting from its start",
 					"path", path, "size", info.Size(), "offset", offset)
-				offset = info.Size()
+				send("", posReset)
+				offset = 0
 				partial = nil
 			}
 			prev = info
@@ -131,6 +154,10 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 				n, err = f.Read(buf)
 				offset += int64(n)
 				partial = emitLines(append(partial, buf[:n]...), offset, send)
+				if len(partial) > maxLineBytes {
+					send(string(partial), offset) // over-long line: emit in pieces
+					partial = nil
+				}
 			}
 		}
 		f.Close()
@@ -247,10 +274,9 @@ func streamCompressed(ctx context.Context, path string, send func(string, int64)
 	}
 	defer closeDecoder(r)
 
-	br := bufio.NewReader(r)
+	br := bufio.NewReaderSize(r, 64*1024)
 	for ctx.Err() == nil {
-		line, err := br.ReadString('\n')
-		line = strings.TrimRight(line, "\r\n")
+		line, err := readLine(br)
 		if line != "" || err == nil {
 			// Loaded atomically: the zstd decoder reads ahead from its own
 			// goroutines, so the counter can advance concurrently.

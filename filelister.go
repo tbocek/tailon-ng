@@ -22,7 +22,9 @@ type ListEntry struct {
 // extension (.gz/.bz2/.xz/.zst), a numeric rotation suffix (.1, .2.gz), a date
 // suffix (-20260702 or .20260702, optionally compressed), or .old/.bak. Such
 // files are never written to again, so they are excluded from live tailing.
-var staleRE = regexp.MustCompile(`(?i)(\.(gz|bz2|xz|zst)|\.\d+|[.-]\d{8}|\.(old|bak))$`)
+// The rotation counter is at most 3 digits and must not follow another digit,
+// so "backup.2025" and per-host files like "192.168.1.5" stay live.
+var staleRE = regexp.MustCompile(`(?i)(\.(gz|bz2|xz|zst|old|bak)|[.-]\d{8}|[^.\d]\.\d{1,3})$`)
 
 func isStale(path string) bool { return staleRE.MatchString(path) }
 
@@ -112,6 +114,13 @@ func addTree(files map[string]bool, p string) {
 	if err != nil || !info.IsDir() {
 		files[p] = true
 		return
+	}
+	// WalkDir lstats its root, so a symlinked directory would be treated as a
+	// plain file and then dropped; a trailing separator makes the OS resolve
+	// the link, and "tailon-ng /var/log/current" (current -> dir) serves the
+	// tree. Symlinks below the root are still not followed (no cycle risk).
+	if !strings.HasSuffix(p, string(filepath.Separator)) {
+		p += string(filepath.Separator)
 	}
 	filepath.WalkDir(p, func(q string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {

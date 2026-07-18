@@ -243,9 +243,18 @@ func TestStreamFollow(t *testing.T) {
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
+	event := "" // pending named event; its data is a control frame, not a line
 	readData := func() string {
 		for scanner.Scan() {
-			if d, ok := strings.CutPrefix(scanner.Text(), "data: "); ok && d != "" {
+			if name, ok := strings.CutPrefix(scanner.Text(), "event: "); ok {
+				event = name
+				continue
+			}
+			if d, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+				if event != "" || d == "" {
+					event = ""
+					continue
+				}
 				var f sseFrame
 				json.Unmarshal([]byte(d), &f)
 				return f.T
@@ -601,6 +610,106 @@ func TestArchiveProgress(t *testing.T) {
 	}
 	if strings.Contains(string(body), `"o":`) {
 		t.Fatalf("archive frames must not carry resume offsets:\n%s", body)
+	}
+}
+
+// TestStreamRotationReset checks that a rotation while a stream is connected
+// makes the client start over: an "event: reset" arrives mid-stream, followed
+// by the new file's identity and its content — never the new file stitched
+// under the old one's lines.
+func TestStreamRotationReset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "r.log")
+	if err := os.WriteFile(path, []byte("old-1\nold-2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupConfig(t, path)
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "?mode=tail&nlines=1&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got := make(chan string, 16)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			if line := scanner.Text(); line != "" {
+				got <- line
+			}
+		}
+	}()
+	wait := func(want string) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case line := <-got:
+				if strings.Contains(line, want) {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %q", want)
+			}
+		}
+	}
+	wait("old-2") // the backlog rendered; the stream is following
+
+	// Rotate: move the file away, create a replacement.
+	if err := os.Rename(path, path+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("new-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wait("event: reset") // the client is told to start over...
+	wait("new-1")        // ...and receives the new file from its start
+}
+
+// TestStreamResumeRotated checks that a resume offset is rejected when a
+// different file lives at the path now (rotation), even when the replacement
+// is already larger than the offset — size alone cannot tell.
+func TestStreamResumeRotated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.log")
+	if err := os.WriteFile(path, []byte("1\n2\n3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupConfig(t, path)
+	srv := httptest.NewServer(http.HandlerFunc(streamHandler))
+	defer srv.Close()
+
+	// A wrong id with an in-range offset must reset.
+	resp, err := http.Get(srv.URL + "?mode=view&offset=4&id=999-999&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "event: reset") {
+		t.Fatalf("wrong id: expected a reset, got %q", body)
+	}
+
+	// The correct id resumes from the offset, no reset.
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(srv.URL + "?mode=view&offset=4&id=" + fileID(fi) + "&path=" + url.QueryEscape(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(body), "event: reset") {
+		t.Fatalf("matching id: unexpected reset in %q", body)
+	}
+	got := frameTexts(readSSEData(t, strings.NewReader(string(body)), 99, 5*time.Second))
+	if want := []string{"3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resume: got %v, want %v", got, want)
 	}
 }
 

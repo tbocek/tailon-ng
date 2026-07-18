@@ -369,7 +369,7 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
     <span class="sep"></span>
     <span class="filter">
         <span class="input-wrap">
-            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines (regexp)">
+            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression">.*</button>
@@ -525,7 +525,7 @@ function cacheEntry() {
     const key = JSON.stringify([state.file.path, state.mode]);
     let entry = cache.get(key);
     if (entry) cache.delete(key); // re-insert, so eviction drops the least recent
-    else entry = { lines: [], offset: -1, done: false };
+    else entry = { lines: [], offset: -1, id: "", done: false };
     cache.set(key, entry);
     while (cache.size > MAX_CACHE_VIEWS) cache.delete(cache.keys().next().value);
     return entry;
@@ -882,7 +882,10 @@ function connect(locate) {
             viewSettled();
             return;
         }
-        if (entry.offset >= 0) p.set("offset", String(entry.offset));
+        if (entry.offset >= 0) {
+            p.set("offset", String(entry.offset));
+            if (entry.id) p.set("id", entry.id); // prove the offset belongs to this very file
+        }
         // A live single file in view mode loads its backlog and then keeps
         // following — new lines simply append, and the server reads only the
         // appended bytes from there on (files are append-only). Archives stay
@@ -911,9 +914,14 @@ function connect(locate) {
         }
         logview.write(d.p, d.t);
     };
+    src.addEventListener("id", e => {
+        if (entry) entry.id = e.data; // the file identity the cached offset belongs to
+    });
     src.addEventListener("reset", () => {
-        // The file shrank or was replaced: everything cached is invalid.
-        if (entry) { entry.lines = []; entry.offset = -1; }
+        // The file shrank or was replaced: everything shown and cached is
+        // invalid. Clear both — the stream now carries the new file from its
+        // start (a fresh "id" frame follows with its identity).
+        if (entry) { entry.lines = []; entry.offset = -1; entry.id = ""; }
         logview.clear();
     });
     src.addEventListener("progress", e => {
@@ -937,7 +945,19 @@ function connect(locate) {
         viewSettled();
         src.close(); state.source = null; setStatus("");
     });
-    src.onerror = () => setStatus("reconnecting…");
+    src.onerror = () => {
+        // EventSource auto-reconnect would reuse the URL built at connect
+        // time, whose offset is stale by now — the server would re-send
+        // everything since and the view would append it twice. Reconnect
+        // ourselves instead: connect() rebuilds the request from the current
+        // cache state.
+        src.close();
+        if (state.source !== src) return; // a superseded stream's late error
+        state.source = null;
+        setStatus("reconnecting…");
+        const seq = findSeq;
+        setTimeout(() => { if (findSeq === seq) connect(); }, 2000);
+    };
 }
 
 // Find mode: ask the server for the first matches per file (with context) and

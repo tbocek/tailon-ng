@@ -30,7 +30,7 @@ an authenticating reverse proxy.
 
 ## How this fork differs from the original
 
-The "original" here is **[gvalkov/tailon]**, which itself is a fork of [gvalkov/tailon-legacy]. Comparison:
+The "original" here is **[gvalkov/tailon]**, which itself is a fork of [tailon-legacy]. Comparison:
 
 | Area | [gvalkov/tailon] (upstream) | This fork |
 | --- | --- | --- |
@@ -289,3 +289,12 @@ I view AI LLMs as a tool to help write faster and better code. AI assistants
 code piece by piece, the assistant explains, simplifies or fixes. The design 
 calls and the final review stay with me, and every change is backed by 
 tests (`go test -race ./...`). This tool is currently used in production.
+
+[gvalkov/tailon]: https://github.com/gvalkov/tailon
+[tailon-legacy]: https://github.com/gvalkov/tailon-legacy
+[ulikunitz/xz]: https://github.com/ulikunitz/xz
+[klauspost/compress]: https://github.com/klauspost/compress
+[releases]: https://github.com/tbocek/tailon-ng/releases
+[distroless]: https://github.com/GoogleContainerTools/distroless
+[syslog-ng]: https://github.com/syslog-ng/syslog-ng
+[RE2]: https://github.com/google/re2/wiki/Syntax

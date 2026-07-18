@@ -14,7 +14,7 @@ css = pathlib.Path("frontend/main.css").read_text()
 js = pathlib.Path("frontend/main.js").read_text()
 
 html = html.replace("<title>Tailon-ng</title>", "<title>Tailon-ng — live demo</title>")
-html = html.replace('content="File Viewer"',
+html = html.replace('content="Tail and search your log files from the browser"',
                     'content="Drag a log file in — it renders in your browser and never leaves it"')
 html = html.replace('<link rel="stylesheet" href="{{.RelativeRoot}}main.css">',
                     "<style>\n" + css + "</style>")

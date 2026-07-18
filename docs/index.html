@@ -120,7 +120,7 @@
         </div>
         <div class="card">
             <h3>Just tail &amp; grep — no shell</h3>
-            <p><b>tail</b> follows a file live and <b>view</b> reads it whole. Both with search-as-you-type highlighting and next/prev jumping; <b>find</b> greps server-side. Editor-style toggles (<b>Aa</b> case, <b>.*</b> regexp, <b>!</b> invert) shape every search.</p>
+            <p>A single file opens in <b>view</b> — the whole file, following live as it grows. <b>tail</b> follows groups and <b>All files</b> merged; <b>find</b> greps server-side. All with search-as-you-type highlighting, next/prev jumping and editor-style toggles (<b>Aa</b> case, <b>.*</b> regexp, <b>!</b> invert).</p>
         </div>
         <div class="card">
             <h3>Group by date</h3>
@@ -128,7 +128,7 @@
         </div>
         <div class="card">
             <h3>Rotation-aware</h3>
-            <p>Rotated archives (<code>.gz</code>, <code>.xz</code>, <code>.zst</code>, <code>.1</code>, date-stamped) never pollute live tailing. The <b>gz</b> toggle (in find) lists them in the selector and searches live logs and every archive at once, decoded transparently.</p>
+            <p>Rotated archives (<code>.gz</code>, <code>.bz2</code>, <code>.xz</code>, <code>.zst</code>, numeric <code>.1</code>, date-stamped, <code>.old</code>, <code>.bak</code>) never pollute live tailing. The <b>gz</b> toggle (in find) lists them in the selector and searches live logs and every archive at once, decoded transparently.</p>
         </div>
         <div class="card">
             <h3>Select, copy, jump</h3>
@@ -136,7 +136,7 @@
         </div>
         <div class="card">
             <h3>Instant, over SSE</h3>
-            <p>On Linux, appended lines are pushed in <b>milliseconds</b> via inotify (polling fallback elsewhere) and arrive over Server-Sent Events, auto-scrolling while you're at the bottom. Big grep loads show a <b>0–100 progress bar</b> and jump to the end when done.</p>
+            <p>On Linux, appended lines are pushed in <b>milliseconds</b> via inotify (polling fallback elsewhere) and arrive over Server-Sent Events, auto-scrolling while you're at the bottom. Big view and find loads show a <b>0–100 progress bar</b>; a finished view load jumps to the end.</p>
         </div>
         <div class="card">
             <h3>Append-aware caching</h3>
@@ -187,7 +187,7 @@
 tailon-ng "/var/log/**.log"                 <span class="c"># recursive glob — quoted, so tailon-ng expands it (new files included)</span>
 tailon-ng /var/log/nginx/ /var/log/apache/  <span class="c"># several directories</span>
 tailon-ng -b :9000 access.log               <span class="c"># pick the port</span></pre>
-        <p>Then open <code>http://localhost:8080</code>, choose a single file, a <b>subfolder</b>, or <b>All files</b>, pick <b>tail</b>, <b>find</b> or <b>view</b>, and type a regexp to search.</p>
+        <p>Then open <code>http://localhost:8080</code> (or the port you picked), choose a single file (opens in <b>view</b>: the whole file, following live), a <b>subfolder</b> or <b>All files</b> (tailed and merged), or <b>find</b> — and type a regexp to search.</p>
     </section>
 
     <section>
