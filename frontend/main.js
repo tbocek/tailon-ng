@@ -16,8 +16,8 @@ var relativeRoot, DEMO;
 const RELATIVE_ROOT = relativeRoot || "/";
 // "tail" follows live files; "find" searches the selection server-side for
 // the first matches per file with context — bounded and fast on any file
-// size (the ☰ menu's "find in archives" widens it to rotated archives —
-// .gz, .1, … — decoded server-side). "view" shows a
+// size (the gz toggle widens it to rotated archives — .gz, .1, … — decoded
+// server-side). "view" shows a
 // whole file: it is also what clicking a find result or a line's file prefix
 // opens. In tail and view the input is a browser-side search that highlights
 // matches as you type without hiding lines (see searchApply). View works on
@@ -42,10 +42,10 @@ const state = {
 // input (VS Code-style) shape how the query matches — regex off searches the
 // literal text, caseSense off ignores case, invert keeps the lines that do
 // NOT match — and apply to the browser-side search and the server-side find
-// alike. findMatches/findCtx shape a find's results (see FIND_MATCHES). The
-// ☰ menu holds the rest: wrap (line wrapping), archives (find also searches
-// rotated archives) and live (a view keeps following the file after its
-// backlog; off reads it once).
+// alike, and archives (find-only, the gz toggle) widens a find to rotated
+// archives. findMatches/findCtx shape a find's results (see FIND_MATCHES).
+// The ☰ menu holds the rest: wrap (line wrapping) and live (a view keeps
+// following the file after its backlog; off reads it once).
 const SETTINGS_KEY = "tailon-settings";
 const settings = {
     regex: true, caseSense: true, invert: false,
@@ -126,9 +126,9 @@ function cacheEntry() {
 
 const el = {};
 [
-    "file-select", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
-    "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
-    "menu-toggle", "menu", "cfg-wrap", "cfg-archives", "cfg-live",
+    "file-select", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
+    "opt-regex", "opt-case", "opt-invert", "opt-archives", "find-matches", "find-ctx",
+    "menu-toggle", "menu", "cfg-wrap", "cfg-live",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(id => el[id] = document.getElementById(id));
 
@@ -405,8 +405,11 @@ function updateFilterHints() {
         (state.mode === "view" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
-    // The find-shape selects appear only in find mode; matches-per-file only
-    // for group searches (a single-file find always lists all matches).
+    // The gz toggle and the find-shape selects appear only in find mode;
+    // matches-per-file only for group searches (a single-file find always
+    // lists all matches). The input reserves room for the fourth toggle.
+    el["opt-archives"].hidden = !finding;
+    el["filter-input"].closest(".input-wrap").classList.toggle("finding", finding);
     el["find-matches"].hidden = !finding || !state.file || !state.file.all;
     el["find-ctx"].hidden = !finding;
 }
@@ -553,7 +556,7 @@ async function findRequest() {
         findMaxUsed = 100;
     }
     p.set("ctx", String(settings.findCtx));
-    if (settings.archives) p.set("stale", "1"); // the ☰ menu's "find in archives"
+    if (settings.archives) p.set("stale", "1"); // the gz input toggle
     searchParams(p);
 
     let results = null;
@@ -892,8 +895,8 @@ function viewSettled() {
 function jumpToFile(path, text) {
     const i = state.files.findIndex(f => !f.all && f.path === path);
     if (i < 0) return;
-    el["file-select"].value = String(i);
     state.file = state.files[i];
+    comboDisplay();
     state.mode = "view";
     // Keep the query: a view hides nothing, so a find's search carries over
     // and its matches arrive already highlighted (viewSettled lands on the
@@ -956,8 +959,8 @@ async function addLocalFile(file) {
     await refreshFiles();
     const j = state.files.indexOf(entry);
     if (j < 0) return;
-    el["file-select"].value = String(j);
     state.file = entry;
+    comboDisplay();
     updateDownload();
     syncModeOptions(); // local files are view-only
     connect();
@@ -974,25 +977,28 @@ async function refreshFiles() {
 
     const prev = state.file && (state.file.scope || state.file.path);
     state.files = [];
-    state.prefix = commonPrefix(data.map(e => e.path));
-    el["file-select"].replaceChildren();
+    // Archived files never get appended, so they are noise in the
+    // tail-oriented tree: only live files get a row. Archives stay reachable
+    // through a find with the gz toggle — a result click opens the decoded view — so
+    // they are kept in state.files (for jumpToFile), just never rendered.
+    const live = data.filter(e => !e.stale);
+    state.prefix = commonPrefix(live.map(e => e.path));
 
-    el["file-select"].add(new Option("All files", "0"));
-    state.files.push({ path: "", all: true });
+    state.files.push({ path: "", all: true, label: "All files" });
 
     // Offer each subfolder as a "tail/find everything under here" entry. A folder
     // is any ancestor directory holding some — but not all — of the files; one
     // holding all of them would just duplicate "All files", so it is skipped.
     const groups = [];
     const counts = {};
-    data.forEach(entry => {
+    live.forEach(entry => {
         let d = entry.path;
         for (let i = d.lastIndexOf("/"); i > 0; i = d.lastIndexOf("/")) {
             d = d.slice(0, i);
             counts[d] = (counts[d] || 0) + 1;
         }
     });
-    Object.keys(counts).filter(d => counts[d] < data.length)
+    Object.keys(counts).filter(d => counts[d] < live.length)
         .forEach(d => groups.push({ path: d, scope: d + "/", all: true, dir: true }));
 
     // Also group files sharing a name prefix (cut at . - _), e.g. two hosts
@@ -1000,12 +1006,12 @@ async function refreshFiles() {
     // selectable for tail and find like a folder. Only maximal prefixes
     // matching ≥2 files are offered, and none that just mirror a directory.
     const dirTotals = {};
-    data.forEach(e => {
+    live.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         dirTotals[dir] = (dirTotals[dir] || 0) + 1;
     });
     const nameGroups = {};
-    data.forEach(e => {
+    live.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         const base = e.path.slice(dir.length);
         for (let i = 1; i < base.length; i++) {
@@ -1031,7 +1037,7 @@ async function refreshFiles() {
     // its base name. Every ancestor folder below the common prefix is offered,
     // so a file's base name is never ambiguous.
     const stack = []; // scopes of the groups enclosing the current entry
-    groups.concat(data).sort((a, b) => {
+    groups.concat(live).sort((a, b) => {
         const ka = a.scope || a.path, kb = b.scope || b.path;
         if (ka !== kb) return ka < kb ? -1 : 1;
         return (a.all ? 0 : 1) - (b.all ? 0 : 1); // a group precedes a file of the same name
@@ -1048,17 +1054,20 @@ async function refreshFiles() {
         } else if (en.all) {
             label = "▸ " + en.path.slice(en.path.lastIndexOf("/") + 1) + "*";
         } else {
-            label = en.path.slice(en.path.lastIndexOf("/") + 1) + (en.stale ? "  (archived)" : "");
+            label = en.path.slice(en.path.lastIndexOf("/") + 1);
         }
-        const indent = "   ".repeat(stack.length); // nbsp: <option> would collapse plain spaces
-        el["file-select"].add(new Option(indent + label, String(state.files.length)));
+        const indent = "   ".repeat(stack.length); // nbsp indent per depth
+        en.label = indent + label;
         state.files.push(en);
         if (en.all) stack.push(en.scope);
     });
 
+    // Archives: in state.files without a label — comboRender skips them.
+    data.filter(e => e.stale).forEach(e => state.files.push(e));
+
     // Dropped files close the list, visibly local.
     localFiles.forEach(f => {
-        el["file-select"].add(new Option("⬇ " + f.path + " (local)", String(state.files.length)));
+        f.label = "⬇ " + f.path + " (local)";
         state.files.push(f);
     });
 
@@ -1066,7 +1075,7 @@ async function refreshFiles() {
     let i = state.files.findIndex(f => (f.scope || f.path) === prev);
     if (i < 0) i = state.files.length ? 0 : -1;
     state.file = i >= 0 ? state.files[i] : null;
-    if (i >= 0) el["file-select"].value = String(i);
+    comboDisplay();
     syncModeOptions();
 }
 
@@ -1077,6 +1086,85 @@ function updateDownload() {
         el["action-download"].href = RELATIVE_ROOT + "files/?path=" + encodeURIComponent(state.file.path);
         el["action-download"].download = state.file.path.split("/").pop();
     }
+}
+
+// The file selector is a writable dropdown: the input shows the selection,
+// clicking it drops the full tree, and typing filters the entries (debounced)
+// with a prefix match on each path segment — "ngi" finds nginx/ anywhere in
+// the tree. ArrowUp/Down and Enter, or a click, select; Escape closes. With
+// hundreds of served files this beats scrolling a native <select> popup.
+const combo = { open: false, items: [], cur: -1 };
+
+// comboDisplay writes the current selection's name into the input.
+function comboDisplay() {
+    const f = state.file;
+    el["file-select"].value =
+        !f ? "" :
+        f.local ? f.path + " (local)" :
+        f.all && !f.path ? "All files" :
+        f.all ? stripPrefix(f.path) + (f.dir ? "/" : "*") :
+        stripPrefix(f.path) + (f.stale ? "  (archived)" : "");
+}
+
+// comboFilterLabel is the flat label an entry shows while filtering (the tree
+// labels with their indentation only make sense unfiltered).
+function comboFilterLabel(f) {
+    if (f.local) return "⬇ " + f.path + " (local)";
+    if (f.all && !f.path) return "All files";
+    if (f.all) return "▸ " + stripPrefix(f.path) + (f.dir ? "/" : "*");
+    return stripPrefix(f.path);
+}
+
+// comboRender (re)builds the popup: the full tree for an empty query, the
+// matching entries flat otherwise.
+function comboRender(query) {
+    const q = query.trim().toLowerCase();
+    const list = el["file-list"];
+    list.replaceChildren();
+    combo.items = [];
+    combo.cur = -1;
+    state.files.forEach((f, i) => {
+        if (f.stale) return; // archives surface through find, not the selector
+        if (q) {
+            // Prefix-match any segment of the (prefix-stripped) path;
+            // decorations like ▸ or "(archived)" are not matched.
+            const key = f.all && !f.path ? "all files" : stripPrefix(f.scope || f.path);
+            if (!("/" + key.toLowerCase()).includes("/" + q)) return;
+        }
+        const item = document.createElement("div");
+        item.className = "combo-item";
+        item.textContent = q ? comboFilterLabel(f) : f.label;
+        item.dataset.i = String(i);
+        list.appendChild(item);
+        if (f === state.file) combo.cur = combo.items.length;
+        combo.items.push(i);
+    });
+    if (q) combo.cur = combo.items.length ? 0 : -1; // the top match is the target
+    combo.open = combo.items.length > 0;
+    list.hidden = !combo.open;
+    comboCur();
+}
+
+// comboCur marks the highlighted row and keeps it scrolled into view.
+function comboCur() {
+    const rows = el["file-list"].children;
+    for (let j = 0; j < rows.length; j++) rows[j].classList.toggle("cur", j === combo.cur);
+    if (combo.cur >= 0 && rows[combo.cur]) rows[combo.cur].scrollIntoView({ block: "nearest" });
+}
+
+function comboMove(dir) {
+    if (!combo.items.length) return;
+    combo.cur = combo.cur < 0
+        ? (dir > 0 ? 0 : combo.items.length - 1)
+        : (combo.cur + dir + combo.items.length) % combo.items.length;
+    comboCur();
+}
+
+// comboClose hides the popup and restores the selection's name in the input.
+function comboClose() {
+    el["file-list"].hidden = true;
+    combo.open = false;
+    comboDisplay();
 }
 
 function init() {
@@ -1197,19 +1285,51 @@ function init() {
         );
     });
 
-    el["file-select"].addEventListener("focus", refreshFiles);
-    el["file-select"].onchange = () => {
-        state.file = state.files[Number(el["file-select"].value)];
+    // The writable file dropdown: focus refreshes the listing and drops the
+    // full tree (the text pre-selected, so typing starts a filter right away);
+    // input filters debounced; ArrowUp/Down + Enter or a click select.
+    const fileInput = el["file-select"];
+    const selectEntry = i => {
+        state.file = state.files[i];
+        comboClose();
+        fileInput.blur();
         updateDownload();
         syncModeOptions(); // single files open in view; groups tail
         connect();
     };
+    let comboTimer = 0;
+    fileInput.addEventListener("focus", () => {
+        refreshFiles().then(() => { fileInput.select(); comboRender(""); });
+    });
+    fileInput.addEventListener("input", () => {
+        clearTimeout(comboTimer);
+        comboTimer = setTimeout(() => comboRender(fileInput.value), 150);
+    });
+    fileInput.addEventListener("keydown", e => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            if (combo.open) comboMove(e.key === "ArrowDown" ? 1 : -1);
+            else comboRender("");
+        } else if (e.key === "Enter" && combo.open && combo.cur >= 0) {
+            selectEntry(combo.items[combo.cur]);
+        } else if (e.key === "Escape") {
+            e.stopPropagation(); // just close the list; keep line selections
+            comboClose();
+            fileInput.blur();
+        }
+    });
+    fileInput.addEventListener("blur", comboClose);
+    el["file-list"].addEventListener("mousedown", e => e.preventDefault()); // keep the input focused
+    el["file-list"].addEventListener("click", e => {
+        const item = e.target.closest(".combo-item");
+        if (item) selectEntry(Number(item.dataset.i));
+    });
 
     // The search toggles inside the input: flipping one re-runs the search
     // right away — and the find too when results are showing (the toggle is
     // as deliberate as the button). Focus returns to the input, like an
     // editor's find widget.
-    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"]].forEach(([id, key]) => {
+    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"], ["opt-archives", "archives"]].forEach(([id, key]) => {
         const btn = el[id];
         btn.classList.toggle("on", settings[key]);
         btn.onclick = () => {
@@ -1248,11 +1368,10 @@ function init() {
     });
 
     // The ☰ checkboxes, each persisting its setting and applying it: wrap
-    // toggles the logview class, "find in archives" re-runs a shown find,
+    // toggles the logview class and
     // "live view" reconnects — to follow, or to stop following.
     [
         ["cfg-wrap", "wrap", () => el["logview"].classList.toggle("wrap", settings.wrap)],
-        ["cfg-archives", "archives", () => { if (state.mode === "find" && state.filter) connect(); }],
         ["cfg-live", "live", () => { if (state.mode === "view") connect(); }],
     ].forEach(([id, key, apply]) => {
         el[id].checked = settings[key];

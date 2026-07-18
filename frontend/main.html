@@ -18,7 +18,10 @@
         </script>
 
 <div id="toolbar">
-    <select id="file-select" title="File"></select>
+    <span class="combo">
+        <input id="file-select" type="text" spellcheck="false" autocomplete="off" placeholder="file" title="File — click for the tree, type to filter">
+        <div id="file-list" hidden></div>
+    </span>
     <select id="mode-select" title="Mode"></select>
     <span class="sep"></span>
     <span class="filter">
@@ -28,6 +31,7 @@
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
+                <button id="opt-archives" title="Find in archives: also search rotated archives (.gz, .1, …)" hidden>gz</button>
             </span>
         </span>
         <select id="find-matches" title="Matches shown per file" hidden></select>
@@ -45,7 +49,6 @@
     </span>
     <div id="menu" hidden>
         <label><input id="cfg-wrap" type="checkbox"> wrap lines</label>
-        <label><input id="cfg-archives" type="checkbox"> find in archives</label>
         <label><input id="cfg-live" type="checkbox"> live view</label>
         <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">version {{.Version}}</a>
     </div>

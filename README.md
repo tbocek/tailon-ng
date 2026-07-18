@@ -78,9 +78,9 @@ package manager. It runs as root so it can read root-owned system logs (such as
 a non-root user can read, add `--user` (for example `--user 65532`, or
 `--user 65532:4` to keep the owning group's read access).
 
-The image is small — the binary effectively *is* the image. A pull downloads
-the compressed content, about **4.33 MB**; the disk-usage figure is the
-unpacked image (both architectures, under the containerd image store):
+The image is small. A pull downloads the compressed content, about **4.33 MB**; 
+the disk-usage figure is the unpacked image (both architectures, under the 
+containerd image store):
 
 ```
 IMAGE                         ID             DISK USAGE   CONTENT SIZE   EXTRA
@@ -124,19 +124,22 @@ across the whole file, each jumping back into the view at its line.
 
 Three editor-style toggles inside the input shape search and find alike:
 **Aa** match case, **.\*** regular expression (off searches the literal
-text), **!** invert (keep the lines that do *not* match, like `grep -v`). The
-**☰ menu** holds the remaining settings — **wrap lines**, **find in
-archives** (find also searches rotated archives, decoded transparently) and
-**live view** (off makes a view read once) — plus the running version. All
-toggles and settings persist in the browser (localStorage).
+text), **!** invert (keep the lines that do *not* match, like `grep -v`). In
+find mode a fourth, **gz**, widens the find to rotated archives, decoded
+transparently. The **☰ menu** holds the remaining settings — **wrap lines**
+and **live view** (off makes a view read once) — plus the running version.
+All toggles and settings persist in the browser (localStorage).
 
-**The file selector is a tree.** Subfolders, and groups of files sharing a
-name prefix (per-host logs, say), are selectable entries — tail or find
-everything under one of them. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
-`.zst`, numeric `.1`, date-stamped `-YYYYMMDD`, `.old`, `.bak`) are listed as
-*archived* and excluded from live tailing; viewing one decodes it
-transparently. Binary files (a NUL byte in the first kilobyte — `wtmp`,
-journald files, stray executables) are not served at all.
+**The file selector is a tree — and writable.** Subfolders, and groups of
+files sharing a name prefix (per-host logs, say), are selectable entries —
+tail or find everything under one of them. Typing into the selector filters
+the entries, prefix-matching each path segment (`ngi` finds `nginx/` anywhere
+in the tree); ArrowUp/Down and Enter select. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
+`.zst`, numeric `.1`, date-stamped `-YYYYMMDD`, `.old`, `.bak`) never get
+appended, so the selector does not list them — the **gz** toggle widens a
+find to them, and clicking a result opens the decoded view. Binary
+files (a NUL byte in the first kilobyte — `wtmp`, journald files, stray
+executables) are not served at all.
 
 **Merged streams stay readable.** In **All files** (the default) every line
 carries its file as a prefix in a stable per-file color, so interleaved
@@ -197,10 +200,10 @@ directory and "**" across them (so "/var/log/**.log" finds .log files at any
 depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments.
 
-Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing. With "find in archives" enabled (web UI, in the
-menu) find also searches them, decompressed transparently, and viewing one
-shows it decoded.
+Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) never get
+appended, so the file selector does not list them. With the "gz" toggle
+enabled (web UI, next to the find input) find searches them too, decompressed
+transparently, and clicking a result opens the decoded view.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.
@@ -252,23 +255,15 @@ which decode `.xz` and `.zst` archives. File reading and following live in
 `tailer.go`; the inotify wake-up path (Linux, raw `syscall` — no dependency) in
 `watcher_linux.go`, with the polling fallback in `watcher_other.go`.
 
-### TODO
-
-* Better UI for the files drop down menu. For many files the current view can be improved
-
 ### Versioning
 
-Release binaries are stamped with their git tag at build time
+Verifiable release binaries are stamped with their git tag at build time
 (`-ldflags "-X main.version=..."` in the GitHub Actions workflow), which is what
 the UI's version badge shows. Local builds show `dev`; to stamp one yourself:
 
 ```
 go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
 ```
-
-### Testing
-
-Run the unit tests with `go test ./...`.
 
 ## Project lineage
 
@@ -288,8 +283,7 @@ the source of the recurring "wait, which tailon?" confusion:
 ## AI Usage
 
 I view AI LLMs as a tool to help write faster and better code. AI assistants
-(Opus/Fable/Qwen/Gemma) wrote a substantial part of this tool, driven by a
-running code review: I question the code piece by piece, the assistant
-explains, simplifies or fixes. The design calls and the final review stay
-with me, and every change is backed by tests (`go test -race ./...`). This
-tool is currently used in production.
+(Opus/Fable/Qwen/Gemma) wrote a substantial part of this tool. I question the 
+code piece by piece, the assistant explains, simplifies or fixes. The design 
+calls and the final review stay with me, and every change is backed by 
+tests (`go test -race ./...`). This tool is currently used in production.

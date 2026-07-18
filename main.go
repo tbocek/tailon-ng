@@ -25,10 +25,10 @@ directory and "**" across them (so "/var/log/**.log" finds .log files at any
 depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments.
 
-Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) are listed
-but excluded from live tailing. With "find in archives" enabled (web UI, in the
-menu) find also searches them, decompressed transparently, and viewing one
-shows it decoded.
+Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) never get
+appended, so the file selector does not list them. With the "gz" toggle
+enabled (web UI, next to the find input) find searches them too, decompressed
+transparently, and clicking a result opens the decoded view.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.
