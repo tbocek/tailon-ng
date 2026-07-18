@@ -91,8 +91,10 @@ ghcr.io/tbocek/tailon-ng:28   34285fe33ef8       19.3MB         4.33MB
 
 Run tailon-ng with the files or directories you want to watch — each argument
 is a file, a directory (served recursively; new files are picked up as they
-appear), or a shell glob, where `*` matches within a directory and `**`
-across them — then open http://localhost:8080:
+appear), or a glob, where `*` matches within a directory and `**` across
+them. Quote globs so tailon-ng expands them, not the shell — tailon-ng
+re-expands on every listing, so files created later are picked up. Then open
+http://localhost:8080:
 
 ```
 tailon-ng /var/log/apache/access.log /var/log/apache/error.log /var/log/messages
