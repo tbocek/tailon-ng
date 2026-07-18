@@ -42,8 +42,9 @@ const state = {
 // input (VS Code-style) shape how the query matches — regex off searches the
 // literal text, caseSense off ignores case, invert keeps the lines that do
 // NOT match — and apply to the browser-side search and the server-side find
-// alike, and archives (find-only, the gz toggle) widens a find to rotated
-// archives. findMatches/findCtx shape a find's results (see FIND_MATCHES).
+// alike, and archives (the gz toggle) lists rotated archives in the file
+// selector and widens a find to them.
+// findMatches/findCtx shape a find's results (see FIND_MATCHES).
 // The ☰ menu holds the rest: wrap (line wrapping) and live (a view keeps
 // following the file after its backlog; off reads it once).
 const SETTINGS_KEY = "tailon-settings";
@@ -405,9 +406,11 @@ function updateFilterHints() {
         (state.mode === "view" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
-    // The gz toggle and the find-shape selects appear only in find mode;
-    // matches-per-file only for group searches (a single-file find always
-    // lists all matches). The input reserves room for the fourth toggle.
+    // The gz toggle and the find-shape selects appear only in find mode
+    // (matches-per-file only for group searches — a single-file find always
+    // lists all matches); the input reserves room for the fourth toggle. The
+    // archives setting itself outlives find mode: the selector keeps showing
+    // archives wherever gz was left on.
     el["opt-archives"].hidden = !finding;
     el["filter-input"].closest(".input-wrap").classList.toggle("finding", finding);
     el["find-matches"].hidden = !finding || !state.file || !state.file.all;
@@ -977,12 +980,12 @@ async function refreshFiles() {
 
     const prev = state.file && (state.file.scope || state.file.path);
     state.files = [];
-    // Archived files never get appended, so they are noise in the
-    // tail-oriented tree: only live files get a row. Archives stay reachable
-    // through a find with the gz toggle — a result click opens the decoded view — so
-    // they are kept in state.files (for jumpToFile), just never rendered.
-    const live = data.filter(e => !e.stale);
-    state.prefix = commonPrefix(live.map(e => e.path));
+    // Archived files never get appended, so by default only live files get a
+    // row — the gz toggle adds the archives to the tree. Either way they stay
+    // in state.files (for jumpToFile: a find result click must open the
+    // decoded view even when they have no row of their own).
+    const shown = settings.archives ? data : data.filter(e => !e.stale);
+    state.prefix = commonPrefix(shown.map(e => e.path));
 
     state.files.push({ path: "", all: true, label: "All files" });
 
@@ -991,14 +994,14 @@ async function refreshFiles() {
     // holding all of them would just duplicate "All files", so it is skipped.
     const groups = [];
     const counts = {};
-    live.forEach(entry => {
+    shown.forEach(entry => {
         let d = entry.path;
         for (let i = d.lastIndexOf("/"); i > 0; i = d.lastIndexOf("/")) {
             d = d.slice(0, i);
             counts[d] = (counts[d] || 0) + 1;
         }
     });
-    Object.keys(counts).filter(d => counts[d] < live.length)
+    Object.keys(counts).filter(d => counts[d] < shown.length)
         .forEach(d => groups.push({ path: d, scope: d + "/", all: true, dir: true }));
 
     // Also group files sharing a name prefix (cut at . - _), e.g. two hosts
@@ -1006,12 +1009,12 @@ async function refreshFiles() {
     // selectable for tail and find like a folder. Only maximal prefixes
     // matching ≥2 files are offered, and none that just mirror a directory.
     const dirTotals = {};
-    live.forEach(e => {
+    shown.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         dirTotals[dir] = (dirTotals[dir] || 0) + 1;
     });
     const nameGroups = {};
-    live.forEach(e => {
+    shown.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         const base = e.path.slice(dir.length);
         for (let i = 1; i < base.length; i++) {
@@ -1037,7 +1040,7 @@ async function refreshFiles() {
     // its base name. Every ancestor folder below the common prefix is offered,
     // so a file's base name is never ambiguous.
     const stack = []; // scopes of the groups enclosing the current entry
-    groups.concat(live).sort((a, b) => {
+    groups.concat(shown).sort((a, b) => {
         const ka = a.scope || a.path, kb = b.scope || b.path;
         if (ka !== kb) return ka < kb ? -1 : 1;
         return (a.all ? 0 : 1) - (b.all ? 0 : 1); // a group precedes a file of the same name
@@ -1054,7 +1057,7 @@ async function refreshFiles() {
         } else if (en.all) {
             label = "▸ " + en.path.slice(en.path.lastIndexOf("/") + 1) + "*";
         } else {
-            label = en.path.slice(en.path.lastIndexOf("/") + 1);
+            label = en.path.slice(en.path.lastIndexOf("/") + 1) + (en.stale ? "  (archived)" : "");
         }
         const indent = "   ".repeat(stack.length); // nbsp indent per depth
         en.label = indent + label;
@@ -1062,8 +1065,8 @@ async function refreshFiles() {
         if (en.all) stack.push(en.scope);
     });
 
-    // Archives: in state.files without a label — comboRender skips them.
-    data.filter(e => e.stale).forEach(e => state.files.push(e));
+    // With the gz toggle off, archives still exist in state.files — hidden.
+    if (!settings.archives) data.filter(e => e.stale).forEach(e => state.files.push(e));
 
     // Dropped files close the list, visibly local.
     localFiles.forEach(f => {
@@ -1112,7 +1115,7 @@ function comboFilterLabel(f) {
     if (f.local) return "⬇ " + f.path + " (local)";
     if (f.all && !f.path) return "All files";
     if (f.all) return "▸ " + stripPrefix(f.path) + (f.dir ? "/" : "*");
-    return stripPrefix(f.path);
+    return stripPrefix(f.path) + (f.stale ? "  (archived)" : "");
 }
 
 // comboRender (re)builds the popup: the full tree for an empty query, the
@@ -1124,7 +1127,7 @@ function comboRender(query) {
     combo.items = [];
     combo.cur = -1;
     state.files.forEach((f, i) => {
-        if (f.stale) return; // archives surface through find, not the selector
+        if (f.stale && !settings.archives) return; // gz off: archives stay hidden
         if (q) {
             // Prefix-match any segment of the (prefix-stripped) path;
             // decorations like ▸ or "(archived)" are not matched.
