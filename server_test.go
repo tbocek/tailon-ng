@@ -635,19 +635,26 @@ func TestStreamRotationReset(t *testing.T) {
 
 	got := make(chan string, 16)
 	go func() {
+		defer close(got) // a stream that dies early surfaces in wait()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			if line := scanner.Text(); line != "" {
 				got <- line
 			}
 		}
+		// scanner.Err() is the deferred resp.Body.Close() at test end — the
+		// expected shutdown, and too late to report through t in any case.
+		_ = scanner.Err()
 	}()
 	wait := func(want string) {
 		t.Helper()
 		deadline := time.After(5 * time.Second)
 		for {
 			select {
-			case line := <-got:
+			case line, ok := <-got:
+				if !ok {
+					t.Fatalf("stream ended while waiting for %q", want)
+				}
 				if strings.Contains(line, want) {
 					return
 				}
