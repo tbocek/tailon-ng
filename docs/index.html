@@ -88,31 +88,31 @@
     <div class="usps">
         <div class="card">
             <h3>Do one thing, but do it right</h3>
-            <p>Tailing and searching logs is the <b>whole feature list</b> — no dashboards, no ingestion pipeline, no query language. The effort goes into the details of that one job: millisecond tailing, bounded find over huge archives, append-aware caching, timestamp-merged views.</p>
+            <p>Tailing and searching logs is the <b>whole feature list</b>. No dashboards, no ingestion pipeline, no query language. What you get: new lines appear the moment they are written, search answers fast no matter how big the file, switching between files is instant, and logs from many hosts read as one chronological stream.</p>
         </div>
         <div class="card">
             <h3>Made for self-hosting</h3>
-            <p>No database, no agents, no ingestion pipeline — <b>just files</b>. Point it at the logs already on disk (syslog-ng, journald, Docker, app log files) and read them. One auditable static binary, ideal for a home server or a single VPS.</p>
+            <p>No database, no agents, no ingestion pipeline, <b>just files</b>. Point it at the logs already on disk (syslog-ng, journald, Docker, app log files) and read them. One static binary, ideal for a home server or a single VPS.</p>
         </div>
         <div class="card">
             <h3>No built-in auth</h3>
-            <p>Tailon-ng does <b>no authentication</b> of its own — anyone who can reach its port can read the served files. Bind it to localhost or run it behind an authenticating reverse proxy. It's a log viewer, not a gateway.</p>
+            <p>Tailon-ng does <b>no authentication</b> of its own. Anyone who can reach its port can read the served files. Bind it to localhost or run it behind an authenticating reverse proxy.</p>
         </div>
         <div class="card">
             <h3>Almost no dependencies</h3>
-            <p>Go standard library throughout, plus exactly two pure-Go decompression libraries (xz, zstd) for reading rotated archives. Vanilla HTML/CSS/JS frontend — no frameworks, no npm, no external <code>tail</code>/<code>grep</code>.</p>
+            <p>Go standard library throughout, plus two pure-Go decompression libraries (xz, zstd) for reading rotated archives. Vanilla HTML/CSS/JS frontend, no frameworks, no npm, no external <code>tail</code>/<code>grep</code>.</p>
         </div>
         <div class="card">
             <h3>Minimal code</h3>
-            <p>About 2,600 lines of code, total — 1,300 in the Go backend, 1,300 in the browser frontend. Small enough to read in one sitting and audit before you run it on a server.</p>
+            <p>About 2,600 lines of code, total. 1,300 in the Go backend, 1,300 in the browser frontend. Small enough to read in one sitting and audit before you run it on a server.</p>
         </div>
         <div class="card">
             <h3>Single binary</h3>
-            <p>Everything — templates, CSS, JS — is embedded. Drop one static binary on a box and run it. Linux &amp; macOS, Intel &amp; ARM.</p>
+            <p>Everything — templates, CSS, JS — is embedded. Drop one static binary on a box and run it. Linux &amp; macOS, x86 &amp; ARM.</p>
         </div>
         <div class="card">
             <h3>Just tail &amp; grep — no shell</h3>
-            <p><b>tail</b> follows a file live and <b>view</b> reads it whole — both with search-as-you-type highlighting and next/prev jumping; <b>find</b> greps server-side. Editor-style toggles (<b>Aa</b> case, <b>.*</b> regexp, <b>!</b> invert) shape every search — all in-process in Go, with no <code>grep</code>/<code>sed</code>/<code>awk</code> subprocess and nothing that reaches a shell.</p>
+            <p><b>tail</b> follows a file live and <b>view</b> reads it whole. Both with search-as-you-type highlighting and next/prev jumping; <b>find</b> greps server-side. Editor-style toggles (<b>Aa</b> case, <b>.*</b> regexp, <b>!</b> invert) shape every search — all in-process in Go, with no <code>grep</code>/<code>sed</code>/<code>awk</code> subprocess and nothing that reaches a shell.</p>
         </div>
         <div class="card">
             <h3>Group by date</h3>
@@ -120,11 +120,11 @@
         </div>
         <div class="card">
             <h3>Rotation-aware</h3>
-            <p>Rotated archives (<code>.gz</code>, <code>.xz</code>, <code>.zst</code>, <code>.1</code>, date-stamped) never pollute live tailing. Select one to view it decoded, or enable <b>find in archives</b> (☰ menu) to search live logs and every archive at once.</p>
+            <p>Rotated archives (<code>.gz</code>, <code>.xz</code>, <code>.zst</code>, <code>.1</code>, date-stamped) never pollute live tailing. The <b>gz</b> toggle (in find) lists them in the selector and searches live logs and every archive at once, decoded transparently.</p>
         </div>
         <div class="card">
             <h3>Select, copy, jump</h3>
-            <p>Click a line to highlight it (<code>Ctrl</code> toggles, <code>Shift</code> ranges), then <code>Ctrl-C</code> copies exactly those lines. In merged views, click a line's file prefix to jump into that file's view — scrolled to that very line.</p>
+            <p>Click a line to highlight it (<code>Ctrl</code> toggles, <code>Shift</code> ranges), then <code>Ctrl-C</code> copies exactly those lines. In merged views, click a line's file prefix to jump into that file's view, scrolled to that very line.</p>
         </div>
         <div class="card">
             <h3>Instant, over SSE</h3>

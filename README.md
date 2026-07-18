@@ -12,11 +12,11 @@
 > archives, nothing else), no JavaScript toolchain, and a single static binary.
 
 **Do one thing, but do it right.** Tailon-ng tails and shows your log files
-from the browser. Thats it. There is no dashboard builder, no ingestion pipeline, 
-no query language, no agents and no config file to learn. There is only: live tailing
-that arrives in milliseconds, a bounded server-side find that stays fast on
-huge files and rotated archives, an append-aware cache that makes switching
-views instant, logs from many hosts merged in timestamp order, and a UI with editor-style search toggles, real progress bars and ANSI colors.
+from the browser. That's it. There is no dashboard builder, no ingestion pipeline,
+no query language, no agents and no config file to learn. What you get: new
+lines appear the moment they are written, search answers fast no matter how
+big the file, switching between files is instant, and logs from many hosts
+read as one chronological stream.
 
 Reading, following and searching are all done natively in Go and in the browser: 
 tailon-ng never shells out to `tail`, `grep` or any other tool. It is almost entirely 
