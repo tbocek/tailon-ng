@@ -107,19 +107,28 @@ func TestPrimeTimestamper(t *testing.T) {
 		t.Fatalf("undated backlog line stamped %v, want the primed %v", got, want)
 	}
 
-	// A file with no timestamps at all primes nothing: stamping falls back to
-	// time.Now — ordering by arrival, never displayed.
+	// A file with no timestamps at all is anchored at its modification time,
+	// so its lines sort near the file's true age instead of as "now".
 	np := filepath.Join(dir, "n.log")
 	if err := os.WriteFile(np, []byte("plain\nlines\nonly\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if ts := primeTimestamper(np, 2); ts.layout != "" || !ts.last.IsZero() {
-		t.Fatalf("undated file: layout=%q last=%v", ts.layout, ts.last)
+	fi, err := os.Stat(np)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts := primeTimestamper(np, 2); ts.layout != "" || !ts.last.Equal(fi.ModTime()) {
+		t.Fatalf("undated file: layout=%q last=%v, want mtime %v", ts.layout, ts.last, fi.ModTime())
 	}
 
-	// A backlog window larger than the file: nothing precedes it, no last.
-	if ts := primeTimestamper(p, 99); !ts.last.IsZero() {
-		t.Fatalf("skip beyond file: last = %v, want zero", ts.last)
+	// A backlog window larger than the file: nothing precedes the backlog, so
+	// the anchor falls back to the file's modification time here too.
+	pfi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts := primeTimestamper(p, 99); !ts.last.Equal(pfi.ModTime()) {
+		t.Fatalf("skip beyond file: last = %v, want mtime %v", ts.last, pfi.ModTime())
 	}
 }
 

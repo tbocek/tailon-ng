@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,6 +60,10 @@ func createListing(sources []string) []*ListEntry {
 
 	res := make([]*ListEntry, 0, len(files))
 	for p := range files {
+		if isBinary(p) {
+			delete(files, p) // drop from the allowlist too: not served at all
+			continue
+		}
 		res = append(res, &ListEntry{Path: p, Stale: isStale(p)})
 	}
 	sort.Slice(res, func(i, j int) bool { return res[i].Path < res[j].Path })
@@ -67,6 +72,37 @@ func createListing(sources []string) []*ListEntry {
 	allFiles = files
 	allFilesMu.Unlock()
 	return res
+}
+
+// isBinary reports whether the file's first kilobyte contains a NUL byte —
+// the classic binary heuristic (git and grep use the same): text in any
+// log-plausible encoding never contains NUL, while ELF binaries, wtmp
+// databases, journald files and the like show one within the first bytes.
+// Binaries are dropped from the listing: they render as garbage and, without
+// newlines to split on, would buffer without bound. Compressed archives are
+// exempt — binary by nature, decoded transparently — and so is anything not
+// a plain readable file: a not-yet-existing path stays servable (judged again
+// on the next listing), and non-regular files are dropped without opening
+// them (reading a FIFO would block).
+func isBinary(path string) bool {
+	if decoder(path) != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.Mode().IsRegular() {
+		return true
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 1024)
+	n, _ := f.Read(buf)
+	return bytes.IndexByte(buf[:n], 0) >= 0
 }
 
 // addTree adds one served path to files: a directory is walked recursively,

@@ -41,18 +41,24 @@ def code_lines(path, comment):
             n += 1
     return n
 
-total = sum(code_lines(f, "//") for f in go_files)
-total += code_lines("frontend/main.js", "//")
-total += sum(1 for l in pathlib.Path("frontend/main.css").read_text().splitlines()
-             if l.strip() and not l.strip().startswith(("/*", "*")))
-total += sum(1 for l in pathlib.Path("frontend/main.html").read_text().splitlines()
-             if l.strip())
-rounded = "{:,}".format(round(total / 100) * 100)
+backend = sum(code_lines(f, "//") for f in go_files)
+frontend = code_lines("frontend/main.js", "//")
+frontend += sum(1 for l in pathlib.Path("frontend/main.css").read_text().splitlines()
+                if l.strip() and not l.strip().startswith(("/*", "*")))
+frontend += sum(1 for l in pathlib.Path("frontend/main.html").read_text().splitlines()
+                if l.strip())
+# Each part is rounded to the nearest 100 and the total is the sum of the
+# rounded parts, so the three numbers shown always add up.
+fmt = lambda n: "{:,}".format(round(n / 100) * 100)
+rounded = fmt(round(backend / 100) * 100 + round(frontend / 100) * 100)
+split = "%s in the Go backend, %s in the browser frontend" % (fmt(backend), fmt(frontend))
 
 idx = pathlib.Path("docs/index.html")
 html = idx.read_text()
 html, n = re.subn(r"([Aa]bout) [\d,]+ lines of code",
                   lambda m: "%s %s lines of code" % (m.group(1), rounded), html)
+html, n2 = re.subn(r"[\d,]+ in the Go backend, [\d,]+ in the browser frontend", split, html)
 idx.write_text(html)
-print("lines of code: %d -> claim 'about %s' (%d spots patched)" % (total, rounded, n))
+print("lines of code: %d go + %d frontend -> 'about %s' (%s) — %d+%d spots patched"
+      % (backend, frontend, rounded, split, n, n2))
 EOF

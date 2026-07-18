@@ -6,6 +6,7 @@ import (
 	"compress/bzip2"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -65,6 +66,7 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 		w = watchFile(path)
 		defer w.close()
 	}
+	buf := make([]byte, 1<<20) // the read-chunk buffer, shared across rounds
 
 	// fail surfaces an open or read error once — a silently empty view is
 	// undebuggable (missing file, permission denied) — and reports whether to
@@ -97,37 +99,59 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 			continue
 		}
 
-		// Detect rotation (a different file now lives at path) or truncation
-		// (the file shrank) and restart from the beginning in either case.
 		if info, err := f.Stat(); err == nil {
-			if (prev != nil && !os.SameFile(info, prev)) || info.Size() < offset {
+			if prev != nil && !os.SameFile(info, prev) {
+				// Rotation: a different file lives at path now; start it fresh.
 				offset = 0
 				partial = nil
 				if w != nil {
 					w.rewatch() // the watch followed the old inode; re-attach by path
 				}
+			} else if info.Size() < offset {
+				// Truncation. Served files are treated as append-only — the
+				// resume/cache design builds on that — so a shrunk file is not
+				// re-read: skip to its new end, keep following, leave a
+				// warning. (copytruncate rotation lands here with size ~0, so
+				// fresh lines still stream from the top.)
+				slog.Warn("file shrank; skipping to its new end",
+					"path", path, "size", info.Size(), "offset", offset)
+				offset = info.Size()
+				partial = nil
 			}
 			prev = info
 		}
 
-		_, err = f.Seek(offset, io.SeekStart)
-		var data []byte
-		if err == nil {
-			data, err = io.ReadAll(f)
+		// Read and emit in bounded chunks — never the whole file at once, so a
+		// terabyte-sized view streams through one fixed buffer. The
+		// unterminated tail is carried across chunks (emitLines' follow
+		// behavior) and flushed after EOF when this is a read-once pass.
+		if _, err = f.Seek(offset, io.SeekStart); err == nil {
+			var n int
+			for err == nil && ctx.Err() == nil {
+				n, err = f.Read(buf)
+				offset += int64(n)
+				partial = emitLines(append(partial, buf[:n]...), offset, send)
+			}
 		}
 		f.Close()
-		if err != nil {
-			// A mid-read failure retries next round from the same offset
-			// (nothing was consumed).
+		if ctx.Err() != nil {
+			return
+		}
+		if err != io.EOF {
+			// A mid-read failure retries next round from the same offset (the
+			// bytes read so far were emitted or are held in partial).
 			if !fail(err) {
 				return
 			}
 			continue
 		}
-		offset += int64(len(data))
-		partial = emitLines(append(partial, data...), offset, follow, send)
 
 		if !follow {
+			if len(partial) > 0 {
+				// The file's unterminated last line (a held trailing "\r" was
+				// a line terminator after all, not half a CRLF pair).
+				send(strings.TrimSuffix(string(partial), "\r"), offset)
+			}
 			return
 		}
 		if !caughtUp {
@@ -144,22 +168,16 @@ func streamFile(ctx context.Context, path string, follow bool, nlines int, start
 // of data's end, so each line's position — the resume point just past it — is
 // offset minus what remains unconsumed. Lines end at "\n", "\r\n" or a lone
 // "\r" (CR-only files exist; a file whose tail held no "\n" at all used to
-// render as nothing). The unterminated tail is returned to carry into the next
-// read: in follow mode later bytes may complete the line (or turn a trailing
-// "\r" into a "\r\n" pair); a read-once pass sends it as a final line instead.
-func emitLines(data []byte, offset int64, follow bool, send func(string, int64)) []byte {
+// render as nothing). The unterminated tail — which later bytes may complete,
+// or turn a trailing "\r" into a "\r\n" pair — is returned to carry into the
+// next read; a read-once pass flushes it as a final line at EOF (streamFile).
+func emitLines(data []byte, offset int64, send func(string, int64)) []byte {
 	for {
 		i := bytes.IndexAny(data, "\r\n")
 		if i < 0 {
-			if follow {
-				return data // hold an unterminated line until its newline arrives
-			}
-			if len(data) > 0 {
-				send(string(data), offset)
-			}
-			return nil
+			return data // hold an unterminated line until its newline arrives
 		}
-		if data[i] == '\r' && i == len(data)-1 && follow {
+		if data[i] == '\r' && i == len(data)-1 {
 			return data // might be the first half of a CRLF pair; wait
 		}
 		line := string(data[:i])
@@ -405,6 +423,14 @@ func primeTimestamper(path string, skip int) *timestamper {
 	lines, _ := lastLines(path, primeStamperLines)
 	for _, line := range lines[:max(0, len(lines)-skip)] {
 		t.stamp(line)
+	}
+	// A file with no recognizable timestamp anywhere: anchor it at the file's
+	// modification time — the moment its last line was written — so its
+	// backlog sorts near its true age instead of as "now".
+	if t.last.IsZero() {
+		if fi, err := os.Stat(path); err == nil {
+			t.last = fi.ModTime()
+		}
 	}
 	return t
 }

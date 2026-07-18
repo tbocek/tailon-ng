@@ -66,6 +66,23 @@ func TestListingDir(t *testing.T) {
 	}
 }
 
+func TestListingSkipsBinary(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.log"), []byte("2026-07-18 ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wtmp"), []byte("\x00\x01\x02binary\x00junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lst := createListing([]string{dir})
+	if len(lst) != 1 || filepath.Base(lst[0].Path) != "app.log" {
+		t.Fatalf("expected only app.log served, got %q", paths(lst))
+	}
+	if fileAllowed(filepath.Join(dir, "wtmp")) {
+		t.Fatal("binary file must not be in the allowlist")
+	}
+}
+
 func TestListingGlob(t *testing.T) {
 	lst := createListing([]string{"testdata/var/log/*.log"})
 	if len(lst) != 4 {

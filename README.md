@@ -10,41 +10,27 @@
 > log files from the browser — but rebuilds the project around the Go standard
 > library: **two third-party dependencies** (pure-Go xz/zstd decoders for rotated
 > archives, nothing else), no JavaScript toolchain, and a single static binary.
-> [How this fork differs from the original](#how-this-fork-differs-from-the-original)
-> spells out exactly what changed and why you might pick it over upstream.
 
-**Do one thing, but do it right.** Tailon-ng tails and greps your log files
-from the browser — and that is the whole feature list. There is no dashboard
-builder, no ingestion pipeline, no query language, no agents and no config
-file to learn. The effort goes into doing that one job properly: live tailing
+**Do one thing, but do it right.** Tailon-ng tails and shows your log files
+from the browser. Thats it. There is no dashboard builder, no ingestion pipeline, 
+no query language, no agents and no config file to learn. There is only: live tailing
 that arrives in milliseconds, a bounded server-side find that stays fast on
 huge files and rotated archives, an append-aware cache that makes switching
-views instant, logs from many hosts merged in timestamp order, and a UI that
-sweats the details — editor-style search toggles, real progress bars, ANSI
-colors — while staying a handful of flat, framework-free files.
+views instant, logs from many hosts merged in timestamp order, and a UI with editor-style search toggles, real progress bars and ANSI colors.
 
-Tailon-ng is a webapp for looking at and searching through log files from your
-browser. It serves files — single files, globs or whole directories — and lets
-you **tail** them live or **grep** through them, with a regular-expression
-search. Reading, following and searching are all done
-natively in Go and in the browser: tailon-ng never shells out to `tail`,
-`grep` or any other tool.
-It is almost entirely Go standard library — the only third-party code is two
-small, pure-Go decompression libraries ([ulikunitz/xz] and [klauspost/compress]
-for zstd) used to read rotated archives — and ships as a single static binary.
+Reading, following and searching are all done natively in Go and in the browser: 
+tailon-ng never shells out to `tail`, `grep` or any other tool. It is almost entirely 
+Go standard library, the only third-party code is two pure-Go decompression libraries 
+([ulikunitz/xz] and [klauspost/compress] for zstd) used to read rotated archives, 
+and ships as a single static binary.
 
-**Security posture, up front:** tailon-ng has **no built-in authentication** —
-anyone who can reach its port can read the files it serves, so bind it to
-localhost (`-b 127.0.0.1:8080`) or put it behind an authenticating reverse proxy.
-And it **never shells out** to `grep`, `sed`, `awk` or anything else — tailing
-and searching run in-process in Go ([RE2]) or in the browser, so nothing typed
-in the UI can reach a shell. More in [Security](#security).
+tailon-ng has **no built-in authentication**. Anyone who can reach its port can read 
+the files it serves, so bind it to localhost (`-b 127.0.0.1:8080`) or put it behind 
+an authenticating reverse proxy.
 
 ## How this fork differs from the original
 
-The "original" here is **[gvalkov/tailon]**, the Go project this repository was
-forked from — *not* the older Python [tailon-legacy] (see [Project
-lineage](#project-lineage)). Same job, far less machinery:
+The "original" here is **[gvalkov/tailon]**, which itself is a fork of [gvalkov/tailon-legacy]. Comparison:
 
 | Area | [gvalkov/tailon] (upstream) | This fork |
 | --- | --- | --- |
@@ -52,14 +38,8 @@ lineage](#project-lineage)). Same job, far less machinery:
 | Frontend | Vue.js single-page app | Framework-free vanilla HTML/CSS/JS |
 | Live updates | SockJS | Server-Sent Events |
 | Frontend assets | produced by a code-generation/build step | embedded with `//go:embed`, no build step |
-| Configuration | configuration file | command-line flags only |
 | Releases | GoReleaser | a small [`release.sh`](release.sh) + GitHub Actions |
 | Tests | Python integration tests | Go unit tests (`go test ./...`) |
-
-The result is a smaller, self-contained binary you can read and audit in one
-sitting — no Node/npm, no asset pipeline, nothing to vendor. Prefer the original's
-Vue UI and configuration-file setup? Use [gvalkov/tailon]. Want a tiny,
-self-contained log tailer? Use this.
 
 ## Install
 
@@ -90,57 +70,29 @@ docker run --rm -p 127.0.0.1:8080:8080 -v /var/log:/var/log:ro \
   ghcr.io/tbocek/tailon-ng:latest /var/log
 ```
 
-`:latest` is the newest release; `:N` (e.g. `:9`) pins one — image tags mirror
+`:latest` is the newest release; `:N` (e.g. `:28`) pins one — image tags mirror
 the plain-increment git tags (v1, v2, …). The image is
 built `FROM` [distroless] `static` — just the static binary, no shell or
 package manager. It runs as root so it can read root-owned system logs (such as
 `/var/log/syslog`) out of the box; to drop privileges when you only serve logs
 a non-root user can read, add `--user` (for example `--user 65532`, or
-`--user 65532:4` to keep the owning group's read access). Either way the mount
-is read-only. Bind the published port to localhost or a private interface —
-tailon-ng has no authentication (see [Security](#security)).
+`--user 65532:4` to keep the owning group's read access).
+
+The image is small — the binary effectively *is* the image. A pull downloads
+the compressed content, about **4.33 MB**; the disk-usage figure is the
+unpacked image (both architectures, under the containerd image store):
+
+```
+IMAGE                         ID             DISK USAGE   CONTENT SIZE   EXTRA
+ghcr.io/tbocek/tailon-ng:28   34285fe33ef8       19.3MB         4.33MB
+```
 
 ## Usage
 
-Files are watched in **tail** mode (follow live, like `tail -f`), searched with
-**find** (the first matches per file with a few lines of context — a scent
-trail; open the file's view to step through all matches. Two selects next to
-the query adjust the shape: matches per file — up to "all", capped at 100 —
-and ±0–10 context lines. A match inside a previous match's context merges
-into that excerpt, highlighted where it stands, instead of repeating), or
-read whole with **view**. Selecting a
-single file always opens it in view — a view follows live after loading its
-backlog, so for one file view *is* tail plus history; the tail mode remains
-for groups and **All files**, whose streams merge. In tail
-and view the input is a browser-side **search**: matching lines and the
-matched text highlight as you type — nothing is hidden, and lines streaming in
-live are matched as they arrive — and Enter or the ▲▼ buttons step between
-matches. The search covers each line's file content only: the `file:` prefix
-merged streams prepend is UI chrome, not searchable text. The split is labeled in the UI: **search** covers the shown lines,
-**find** scans the full files on the server — and in view the match counter
-also shows the whole-file total (server-counted), so a windowed view of a huge
-file never hides how many matches exist beyond it. Clicking that counter
-**continues the search on the server**: it lists up to 100 matches across the
-whole file, and clicking any of them jumps back into the view at that line.
-Opening a file from a find result carries the query along, so its
-matches arrive already highlighted, centered on the clicked line.
-Tailon-ng itself is configured entirely with command-line flags.
-
-Three editor-style toggles inside the search input shape how the query
-matches, for the browser-side search and the server-side find alike: **Aa**
-match case (on by default), **.\*** regular expression (on by default; off
-searches the literal text, no regexp syntax), and **!** invert (keep the lines
-that do *not* match, like `grep -v` — inverted hits highlight as whole lines,
-since there is no matched text to mark). The **☰ menu** at the toolbar's right
-holds the remaining settings — **wrap lines**, **find in archives** (find also
-searches rotated archives) and **live view** (a view keeps following its file
-after the backlog loads; off reads it once) — plus the running version,
-linking to the releases page. All toggles and settings persist in the browser
-(localStorage).
-
-To get started, run tailon-ng with the files or directories you want to monitor.
-Each argument is a file, a directory, or a shell glob — `*` matches within a
-directory and `**` across them:
+Run tailon-ng with the files or directories you want to watch — each argument
+is a file, a directory (served recursively; new files are picked up as they
+appear), or a shell glob, where `*` matches within a directory and `**`
+across them — then open http://localhost:8080:
 
 ```
 tailon-ng /var/log/apache/access.log /var/log/apache/error.log /var/log/messages
@@ -148,68 +100,68 @@ tailon-ng /var/log/apache/ /var/log/nginx/
 tailon-ng "/var/log/**.log"
 ```
 
-Directories are served recursively — every file beneath them (including in
-subdirectories) is available, and new files are picked up as they appear. The
-file selector renders everything as a tree: each subfolder (and each group of
-files sharing a name prefix, such as per-host logs) is a selectable entry with
-its contents nested beneath it, so you can tail or find just the logs under
-one of them. Viewing a whole file is for single files only — a merged dump of
-several files is not useful, so the view mode is disabled for group entries.
+The server itself is configured through its command-line flags, everything else 
+is the web UI.
 
-Rotated and compressed logs are handled the way you'd want: files that are no
-longer written to (`.gz`, `.bz2`, `.xz`, `.zst`, numeric `.1`, date-stamped
-`-YYYYMMDD`, `.old`, `.bak`) are listed as *archived* but excluded from live
-tailing, so compressed bytes never pollute the stream. Selecting one views it
-with the compression decoded transparently, and with **find in archives**
-enabled (☰ menu) find searches live files *and* every archive together.
+**Three modes.** **tail** follows live, like `tail -f` — the mode for groups
+and **All files**, whose streams merge in timestamp order. **view** shows a
+whole file; selecting a single file always opens it in view, and a view keeps
+following after its backlog loads, so for one file view *is* tail plus
+history. **find** searches on the server and shows the first matches from
+each file with a few lines of context; two selects adjust how many matches
+(up to 100 per file) and how much context (up to ±10 lines). Clicking a
+result opens the file's view at that line, with the query carried along and
+its matches already highlighted.
 
-Tailing is push-based on Linux: appended lines reach the browser in
-milliseconds via **inotify** (through the standard library's `syscall` package
-— no extra dependency), with a polling fallback wherever notifications aren't
-available (other platforms, network filesystems, watch-limit exhaustion). The
-notification only *wakes* the tailer; the read loop stays the source of truth,
-so nothing is ever missed.
+**Search vs find.** In tail and view, the input is a browser-side **search**
+that highlights and hides nothing: matching lines and text light up as you
+type, lines streaming in live match as they arrive, and Enter or the ▲▼
+buttons step between matches. The split is labeled in the UI: search covers
+the shown lines, **find** scans the whole files on the server. A view's match
+counter bridges the two — it also shows the server-counted whole-file total,
+and clicking it continues the search on the server, listing up to 100 matches
+across the whole file, each jumping back into the view at its line.
 
-The frontend exploits the fact that log files are **append-only**: every
-single-file view is cached in the browser together with the byte offset read so
-far, keyed by file and mode. Switching between files, searches, or between tail
-and view, re-renders instantly from the cache and asks the server only for the
-bytes that arrived since — and a fully-read archive is never requested again.
-If a file shrank or was replaced (rotation), the server signals a reset and the
-view rebuilds from scratch.
+Three editor-style toggles inside the input shape search and find alike:
+**Aa** match case, **.\*** regular expression (off searches the literal
+text), **!** invert (keep the lines that do *not* match, like `grep -v`). The
+**☰ menu** holds the remaining settings — **wrap lines**, **find in
+archives** (find also searches rotated archives, decoded transparently) and
+**live view** (off makes a view read once) — plus the running version. All
+toggles and settings persist in the browser (localStorage).
 
-View loads show a real **0–100 progress bar** — a thin line under the toolbar
-driven by the server's byte progress (compressed archives report the
-compressed bytes consumed). A view never ships more than the browser keeps:
-the server reads the whole file (that is what the bar tracks) but sends only
-the last 50,000 lines, so viewing a huge archive doesn't push millions of
-lines over the wire that the scrollback would discard anyway. While a load
-streams in, the view holds still instead of chasing the bottom, then jumps to
-the end once at EOF — unless you already started scrolling.
+**The file selector is a tree.** Subfolders, and groups of files sharing a
+name prefix (per-host logs, say), are selectable entries — tail or find
+everything under one of them. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
+`.zst`, numeric `.1`, date-stamped `-YYYYMMDD`, `.old`, `.bak`) are listed as
+*archived* and excluded from live tailing; viewing one decodes it
+transparently. Binary files (a NUL byte in the first kilobyte — `wtmp`,
+journald files, stray executables) are not served at all.
 
-The web UI's file selector includes an **All files** entry (selected by default)
-that streams every served file at once, each line prefixed by its file — the
-prefix carries a stable, muted **per-file color**, so interleaved sources are
-told apart at a glance, and clicking it jumps into that file's view, scrolled
-to and highlighting that very line — and the streams **merged in timestamp
-order**. Several common formats are recognized at
-(or near) the start of each line — ISO 8601 / RFC 3339, `YYYY-MM-DD HH:MM:SS`,
-slash-separated dates, Apache/CLF, Unix `ctime` and syslog (RFC 3164). The
-format is detected per file from its trailing lines (not guessed from a single
-one), and a line without a recognizable timestamp keeps its file's previous
-one, so multi-line entries stay together — even when the backlog *starts*
-mid-entry, the previous date is found by looking further back in the file. A
-line with no date anywhere sorts by arrival time; timestamps only order the
-merge and are never added to the display. Handy when you're watching logs from
-many hosts together.
+**Merged streams stay readable.** In **All files** (the default) every line
+carries its file as a prefix in a stable per-file color, so interleaved
+sources are told apart at a glance — and clicking a prefix jumps into that
+file's view, scrolled to that very line. The merge recognizes the common
+timestamp formats (ISO 8601 / RFC 3339, `YYYY-MM-DD HH:MM:SS`, slash dates,
+Apache/CLF, Unix `ctime`, syslog) at or near the start of a line; a line
+without one keeps its file's previous timestamp, so multi-line entries stay
+together. Timestamps only order the merge — they are never added to the
+display.
 
-Lines are interactive: hovering highlights the line under the cursor, and
-clicking selects it — **Ctrl+click** toggles lines individually, **Shift+click**
-selects a range, clicking a selected line (or pressing **Escape**, or clicking
-the empty space below the log) clears. **Ctrl-C** then copies exactly the
-highlighted lines, confirmed by a small toast — handy for pasting a few
-relevant entries into an issue or a chat. A normal mouse drag still selects and
-copies text natively.
+**Lines are interactive.** Clicking selects a line, **Ctrl+click** toggles
+lines individually, **Shift+click** selects a range, **Escape** clears — and
+**Ctrl-C** copies exactly the highlighted lines, for pasting a few relevant
+entries into an issue or a chat. A normal mouse drag still selects and copies
+text natively.
+
+**Fast by design.** On Linux, appended lines reach the browser in
+milliseconds via inotify (with a polling fallback elsewhere). Log files are
+append-only, and the frontend exploits that: every single-file view is cached
+with the byte offset read so far, so switching files or modes re-renders
+instantly and fetches only what arrived since — a fully-read archive is never
+requested again, and a rotated or truncated file resets its view. A view
+never ships more than the 50,000 lines the scrollback keeps, and big loads
+drive a real 0–100 progress bar under the toolbar.
 
 ### Example: central syslog server
 
@@ -333,29 +285,11 @@ the source of the recurring "wait, which tailon?" confusion:
    differs from the original](#how-this-fork-differs-from-the-original) for the
    point-by-point comparison.
 
-## Similar Projects
+## AI Usage
 
-* [clarity]
-* [errorlog]
-* [log.io]
-* [rtail]
-* [tailon-legacy]
-
-## License
-
-Tailon-ng is released under the terms of the [Apache 2.0 License].
-
-[gvalkov/tailon]: https://github.com/gvalkov/tailon
-[tailon-legacy]:  https://github.com/gvalkov/tailon-legacy
-[syslog-ng]:      https://www.syslog-ng.com/
-[clarity]:        https://github.com/tobi/clarity
-[wtee]:           https://github.com/gvalkov/wtee
-[releases]:       https://github.com/tbocek/tailon-ng/releases
-[errorlog]:       http://www.psychogenic.com/en/products/Errorlog.php
-[log.io]:         http://logio.org/
-[rtail]:          http://rtail.org/
-[RE2]:            https://github.com/google/re2/wiki/Syntax
-[distroless]:     https://github.com/GoogleContainerTools/distroless
-[ulikunitz/xz]:   https://github.com/ulikunitz/xz
-[klauspost/compress]: https://github.com/klauspost/compress
-[Apache 2.0 License]: LICENSE
+I view AI LLMs as a tool to help write faster and better code. AI assistants
+(Opus/Fable/Qwen/Gemma) wrote a substantial part of this tool, driven by a
+running code review: I question the code piece by piece, the assistant
+explains, simplifies or fixes. The design calls and the final review stay
+with me, and every change is backed by tests (`go test -race ./...`). This
+tool is currently used in production.

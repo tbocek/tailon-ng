@@ -303,28 +303,13 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* ANSI color rendering (e.g. Caddy's "\x1b[34mINFO"): the frontend turns SGR
-   escape codes into spans carrying these classes. Palette matches the theme. */
+   escape codes into spans carrying these classes. The 16-color palette rules
+   (.ansi-fg-N / .ansi-bg-N) are generated from ANSI_PALETTE in main.js, so
+   the colors live in one place. */
 .ansi-bold { font-weight: bold; }
 .ansi-dim { opacity: 0.7; }
 .ansi-italic { font-style: italic; }
 .ansi-underline { text-decoration: underline; }
-
-.ansi-fg-0  { color: #282a2e; }  .ansi-bg-0  { background-color: #282a2e; }
-.ansi-fg-1  { color: #cc6666; }  .ansi-bg-1  { background-color: #cc6666; }
-.ansi-fg-2  { color: #b5bd68; }  .ansi-bg-2  { background-color: #b5bd68; }
-.ansi-fg-3  { color: #f0c674; }  .ansi-bg-3  { background-color: #f0c674; }
-.ansi-fg-4  { color: #81a2be; }  .ansi-bg-4  { background-color: #81a2be; }
-.ansi-fg-5  { color: #b294bb; }  .ansi-bg-5  { background-color: #b294bb; }
-.ansi-fg-6  { color: #8abeb7; }  .ansi-bg-6  { background-color: #8abeb7; }
-.ansi-fg-7  { color: #c5c8c6; }  .ansi-bg-7  { background-color: #c5c8c6; }
-.ansi-fg-8  { color: #969896; }  .ansi-bg-8  { background-color: #969896; }
-.ansi-fg-9  { color: #d54e53; }  .ansi-bg-9  { background-color: #d54e53; }
-.ansi-fg-10 { color: #b9ca4a; }  .ansi-bg-10 { background-color: #b9ca4a; }
-.ansi-fg-11 { color: #e7c547; }  .ansi-bg-11 { background-color: #e7c547; }
-.ansi-fg-12 { color: #7aa6da; }  .ansi-bg-12 { background-color: #7aa6da; }
-.ansi-fg-13 { color: #c397d8; }  .ansi-bg-13 { background-color: #c397d8; }
-.ansi-fg-14 { color: #70c0b1; }  .ansi-bg-14 { background-color: #70c0b1; }
-.ansi-fg-15 { color: #ffffff; }  .ansi-bg-15 { background-color: #ffffff; }
 
 /* Selection must contrast everywhere — in particular inside the toolbar
    inputs, whose background is var(--input): a selection of the same color is

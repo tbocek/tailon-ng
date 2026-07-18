@@ -315,28 +315,13 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* ANSI color rendering (e.g. Caddy's "\x1b[34mINFO"): the frontend turns SGR
-   escape codes into spans carrying these classes. Palette matches the theme. */
+   escape codes into spans carrying these classes. The 16-color palette rules
+   (.ansi-fg-N / .ansi-bg-N) are generated from ANSI_PALETTE in main.js, so
+   the colors live in one place. */
 .ansi-bold { font-weight: bold; }
 .ansi-dim { opacity: 0.7; }
 .ansi-italic { font-style: italic; }
 .ansi-underline { text-decoration: underline; }
-
-.ansi-fg-0  { color: #282a2e; }  .ansi-bg-0  { background-color: #282a2e; }
-.ansi-fg-1  { color: #cc6666; }  .ansi-bg-1  { background-color: #cc6666; }
-.ansi-fg-2  { color: #b5bd68; }  .ansi-bg-2  { background-color: #b5bd68; }
-.ansi-fg-3  { color: #f0c674; }  .ansi-bg-3  { background-color: #f0c674; }
-.ansi-fg-4  { color: #81a2be; }  .ansi-bg-4  { background-color: #81a2be; }
-.ansi-fg-5  { color: #b294bb; }  .ansi-bg-5  { background-color: #b294bb; }
-.ansi-fg-6  { color: #8abeb7; }  .ansi-bg-6  { background-color: #8abeb7; }
-.ansi-fg-7  { color: #c5c8c6; }  .ansi-bg-7  { background-color: #c5c8c6; }
-.ansi-fg-8  { color: #969896; }  .ansi-bg-8  { background-color: #969896; }
-.ansi-fg-9  { color: #d54e53; }  .ansi-bg-9  { background-color: #d54e53; }
-.ansi-fg-10 { color: #b9ca4a; }  .ansi-bg-10 { background-color: #b9ca4a; }
-.ansi-fg-11 { color: #e7c547; }  .ansi-bg-11 { background-color: #e7c547; }
-.ansi-fg-12 { color: #7aa6da; }  .ansi-bg-12 { background-color: #7aa6da; }
-.ansi-fg-13 { color: #c397d8; }  .ansi-bg-13 { background-color: #c397d8; }
-.ansi-fg-14 { color: #70c0b1; }  .ansi-bg-14 { background-color: #70c0b1; }
-.ansi-fg-15 { color: #ffffff; }  .ansi-bg-15 { background-color: #ffffff; }
 
 /* Selection must contrast everywhere — in particular inside the toolbar
    inputs, whose background is var(--input): a selection of the same color is
@@ -356,7 +341,7 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
     <span class="sep"></span>
     <span class="filter">
         <span class="input-wrap">
-            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="filter (regexp)">
+            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines (regexp)">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression">.*</button>
@@ -396,12 +381,17 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 // Tailon-ng frontend: framework-free vanilla JavaScript. It fetches the file list
 // and streams lines over Server-Sent Events. Modes: "tail" (follow) and "view"
 // (whole file), both with a browser-side regexp search that highlights
-// matching lines; "find" greps server-side. Injected global: relativeRoot.
+// matching lines; "find" greps server-side.
 
-const RELATIVE_ROOT = (typeof relativeRoot !== "undefined" && relativeRoot) || "/";
-// Demo mode (docs/demo.html, see make-demo.sh): no server at all — the only
-// data source is files dragged in, which never leave the browser.
-const DEMO = typeof window !== "undefined" && window.DEMO === true;
+// Globals injected by the page's inline <script> before this file runs:
+// relativeRoot by the server-rendered main.html; DEMO by the demo build
+// (docs/demo.html, see make-demo.sh — no server at all, so the only data
+// source is files dragged in, which never leave the browser). Redeclaring
+// them makes the names exist either way — a var redeclaration never
+// overwrites a value that is already set.
+var relativeRoot, DEMO;
+
+const RELATIVE_ROOT = relativeRoot || "/";
 // "tail" follows live files; "find" searches the selection server-side for
 // the first matches per file with context — bounded and fast on any file
 // size (the ☰ menu's "find in archives" widens it to rotated archives —
@@ -411,17 +401,12 @@ const DEMO = typeof window !== "undefined" && window.DEMO === true;
 // matches as you type without hiding lines (see searchApply). View works on
 // single files only — for a group, a dump of several files interleaved is
 // not useful, so the option is disabled (see syncModeOptions).
-const MODES = [
-    { value: "tail", label: "tail" },
-    { value: "find", label: "find" },
-    { value: "view", label: "view" },
-];
+const MODES = ["tail", "find", "view"];
 const TAIL_LINES = 10; // trailing lines shown when a tail starts
 const MAX_LINES = 50000; // scrollback cap: lines kept here, and the most a view requests
 // The find-shape choices, each a small select shown in find mode: matches per
 // file (group searches only — a single-file find always lists everything, up
-// to the server cap of 100, which is also what "all" means) and the context
-// lines around each match.
+// to the server's cap of 100) and the context lines around each match.
 const FIND_MATCHES = [1, 3, 5, 10, 25, 100];
 const FIND_CTX = [0, 1, 2, 3, 5, 10];
 
@@ -476,6 +461,26 @@ function searchParams(p) {
     return p;
 }
 
+// readLines streams a ReadableStream (a response body, a dropped file) and
+// calls onLine for each complete line — LF, CRLF and CR-only files split
+// alike; an unterminated last line is flushed at the end. Serves the find
+// response (NDJSON), the count request and dropped local files, so the
+// chunk-decode-split-buffer dance exists once.
+async function readLines(stream, onLine) {
+    const reader = stream.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (; ;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buf += dec.decode(chunk.value, { stream: true });
+        const parts = buf.split(/\r\n|[\r\n]/);
+        buf = parts.pop();
+        parts.forEach(onLine);
+    }
+    if (buf) onLine(buf);
+}
+
 // Served files are append-only, so lines fetched once stay valid: single-file
 // streams are cached per (file, mode) along with the byte offset read so far,
 // and reconnecting re-renders the cache and asks the server only for what
@@ -503,13 +508,14 @@ const el = {};
     "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
     "menu-toggle", "menu", "cfg-wrap", "cfg-archives", "cfg-live",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
-].forEach(function (id) { el[id] = document.getElementById(id); });
+].forEach(id => el[id] = document.getElementById(id));
 
 // In merged streams each file's clickable "file:" prefix gets a muted color,
 // telling interleaved files apart at a glance without making the lines
 // themselves loud. Colors are handed out round-robin on first appearance —
 // unlike a path hash, the first few files can never collide — and stay fixed
-// for the session. The palette is the theme's ANSI colors.
+// for the session. The palette is drawn from the theme's ANSI colors (plus
+// its orange, which the 16-color palette lacks).
 const FILE_COLORS = ["#cc6666", "#de935f", "#f0c674", "#b5bd68", "#8abeb7", "#81a2be", "#b294bb"];
 const fileColors = new Map(); // path -> assigned palette color
 function fileColor(path) {
@@ -527,21 +533,37 @@ function fileColor(path) {
 // "selected" is the source of truth; selAnchor is the range starting point.
 let selAnchor = null;
 
+function clearSelection() {
+    for (const s of el["logview"].querySelectorAll(".log-entry.selected")) {
+        s.classList.remove("selected");
+    }
+}
+
 let toastTimer = 0;
 function toast(msg) {
     el["toast"].textContent = msg;
     el["toast"].classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el["toast"].classList.remove("show"); }, 1800);
+    toastTimer = setTimeout(() => el["toast"].classList.remove("show"), 1800);
 }
 
 // ANSI color support. Tools like Caddy emit SGR escape sequences such as
 // "\x1b[34mINFO\x1b[0m" (blue "INFO", then reset). We translate the color/style
 // codes into styled spans so they render as colors instead of raw escape bytes.
-// The standard 16 colors map to CSS classes (.ansi-fg-N / .ansi-bg-N) so the
-// palette lives in the stylesheet; 256-color and truecolor fall back to inline
-// styles. We build real DOM nodes (never innerHTML), so log text can't inject.
+// The standard 16 colors map to CSS classes (.ansi-fg-N / .ansi-bg-N); 256-color
+// and truecolor fall back to inline styles. We build real DOM nodes (never
+// innerHTML), so log text can't inject.
 const ANSI_RE = /\x1b\[([0-9;:]*)([A-Za-z])/g;
+
+// The terminal palette (matches the theme): ANSI colors 0-15. The
+// .ansi-fg-N / .ansi-bg-N rules are generated from it here, so the palette
+// lives in one place instead of 32 hand-written CSS rules.
+const ANSI_PALETTE = [
+    "#282a2e", "#cc6666", "#b5bd68", "#f0c674", "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+    "#969896", "#d54e53", "#b9ca4a", "#e7c547", "#7aa6da", "#c397d8", "#70c0b1", "#ffffff",
+];
+document.head.appendChild(document.createElement("style")).textContent =
+    ANSI_PALETTE.map((c, i) => ".ansi-fg-" + i + "{color:" + c + "}.ansi-bg-" + i + "{background-color:" + c + "}").join("");
 
 function ansiReset() { return { bold: false, dim: false, italic: false, underline: false, fg: null, bg: null }; }
 function ansiStyled(s) { return s.bold || s.dim || s.italic || s.underline || s.fg !== null || s.bg !== null; }
@@ -550,7 +572,7 @@ function ansiStyled(s) { return s.bold || s.dim || s.italic || s.underline || s.
 function ansi256(n) {
     if (n >= 232) { const v = 8 + (n - 232) * 10; return "rgb(" + v + "," + v + "," + v + ")"; }
     n -= 16;
-    const f = function (c) { return c ? 55 + c * 40 : 0; };
+    const f = c => c ? 55 + c * 40 : 0;
     return "rgb(" + f(Math.floor(n / 36) % 6) + "," + f(Math.floor(n / 6) % 6) + "," + f(n % 6) + ")";
 }
 
@@ -736,6 +758,13 @@ function setLoading(on, holdView) {
     if (on) logview.userScrolled = false;
 }
 
+// setProgress turns the sweep into a real 0-100 bar at d of t bytes (both the
+// stream's SSE progress events and the find's NDJSON progress lines land here).
+function setProgress(d, t) {
+    el["loading"].classList.remove("indeterminate");
+    el["loading"].style.backgroundSize = Math.min(100, Math.round(d * 100 / t)) + "% 100%";
+}
+
 // The one text input is the query in find mode (the button runs it) and a
 // browser-side search everywhere else, highlighting matches as you type
 // without hiding anything (see searchApply) with ▲▼ steppers. Make the split
@@ -747,7 +776,7 @@ function setLoading(on, holdView) {
 function updateFilterHints() {
     const finding = state.mode === "find";
     const rx = settings.regex ? " (regexp)" : "";
-    el["filter-input"].placeholder = (finding ? "find in files" : "search shown lines") + rx;
+    el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") + rx;
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
         : "Browser-side: searches the lines loaded in this view" +
@@ -767,7 +796,8 @@ function updateFilterHints() {
 function connect(locate) {
     if (state.source) { state.source.close(); state.source = null; }
     if (!state.file) return;
-    findSeq++; // any in-flight search result is for a view that no longer exists
+    findSeq++; // any in-flight search result is for a view that no longer exists —
+    if (findAbort) { findAbort.abort(); findAbort = null; } // dropping its connection also stops the server-side scan
     logview.clear();
     logview.locate = locate !== undefined ? locate : null;
     setLoading(false);
@@ -835,8 +865,8 @@ function connect(locate) {
     else setLoading(true, false);
     const src = new EventSource(RELATIVE_ROOT + "stream?" + p.toString());
     state.source = src;
-    src.onopen = function () { setStatus(""); };
-    src.onmessage = function (e) {
+    src.onopen = () => setStatus("");
+    src.onmessage = e => {
         const d = JSON.parse(e.data);
         if (entry) {
             entry.lines.push(d.t);
@@ -847,18 +877,16 @@ function connect(locate) {
         }
         logview.write(d.p, d.t);
     };
-    src.addEventListener("reset", function () {
+    src.addEventListener("reset", () => {
         // The file shrank or was replaced: everything cached is invalid.
         if (entry) { entry.lines = []; entry.offset = -1; }
         logview.clear();
     });
-    src.addEventListener("progress", function (e) {
+    src.addEventListener("progress", e => {
         const p = JSON.parse(e.data); // {"d": bytes read, "t": bytes total}
-        if (!(p.t > 0)) return;
-        el["loading"].classList.remove("indeterminate");
-        el["loading"].style.backgroundSize = Math.min(100, Math.round(p.d * 100 / p.t)) + "% 100%";
+        if (p.t > 0) setProgress(p.d, p.t);
     });
-    src.addEventListener("live", function () {
+    src.addEventListener("live", () => {
         if (state.mode === "view") {
             // A live view: the backlog is rendered and the stream now follows.
             // Settle exactly like an EOF would — locate, search, landing.
@@ -869,23 +897,25 @@ function connect(locate) {
         setLoading(false); // tail's initial catch-up is rendered; now following
         searchApply(); // highlight the search over the backlog; new lines match as they arrive
     });
-    src.addEventListener("eof", function () {
+    src.addEventListener("eof", () => {
         if (entry && state.file && state.file.stale) entry.done = true; // archives are immutable
         logview.flush(); // render what's still queued before judging the jump target
         viewSettled();
         src.close(); state.source = null; setStatus("");
     });
-    src.onerror = function () { setStatus("reconnecting…"); };
+    src.onerror = () => setStatus("reconnecting…");
 }
 
 // Find mode: ask the server for the first matches per file (with context) and
 // render them. findSeq guards against a stale response arriving after the user
 // already switched to another view.
 let findSeq = 0;
+let findAbort = null; // the in-flight find fetch; aborting it stops the server-side scan too
 let findMaxUsed = settings.findMatches; // the per-file cap the last find asked for
 async function findRequest() {
     const seq = ++findSeq;
     if (!state.filter) { setStatus("enter a search"); return; }
+    const ac = findAbort = new AbortController();
     setLoading(true);
     const p = new URLSearchParams({ q: state.filter });
     if (state.file.all) {
@@ -906,33 +936,17 @@ async function findRequest() {
 
     let results = null;
     try {
-        const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString());
+        const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString(), { signal: ac.signal });
         if (!resp.ok) throw new Error(await resp.text());
         // NDJSON: {"d","t"} progress lines drive the 0-100 bar while the scan
         // runs (a rare needle means reading whole files); the last line
         // carries the results.
-        const reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        const takeLine = function (text) {
+        await readLines(resp.body, text => {
             if (!text) return;
             const obj = JSON.parse(text);
-            if (obj.results) {
-                results = obj.results;
-            } else if (obj.t > 0 && seq === findSeq) {
-                el["loading"].classList.remove("indeterminate");
-                el["loading"].style.backgroundSize = Math.min(100, Math.round(obj.d * 100 / obj.t)) + "% 100%";
-            }
-        };
-        for (; ;) {
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            buf += dec.decode(chunk.value, { stream: true });
-            const parts = buf.split("\n");
-            buf = parts.pop();
-            parts.forEach(takeLine);
-        }
-        takeLine(buf.trim());
+            if (obj.results) results = obj.results;
+            else if (obj.t > 0 && seq === findSeq) setProgress(obj.d, obj.t);
+        });
         if (results === null) throw new Error("incomplete response");
     } catch (err) {
         if (seq === findSeq) { setLoading(false); setStatus("search failed: " + err.message); }
@@ -953,7 +967,7 @@ function renderFind(results) {
     // are exactly the ones the query does not match.
     const re = settings.invert ? null : buildRegex();
     const frag = document.createDocumentFragment();
-    const addLine = function (text, cls) {
+    const addLine = (text, cls) => {
         const span = document.createElement("span");
         span.className = "log-entry " + cls;
         appendAnsi(span, text);
@@ -970,7 +984,7 @@ function renderFind(results) {
         head.dataset.text = f.matches[0].text;
         head.title = "open " + f.path;
         frag.appendChild(head);
-        f.matches.forEach(function (m, i) {
+        f.matches.forEach((m, i) => {
             if (i) {
                 const gap = document.createElement("div");
                 gap.className = "find-gap";
@@ -997,7 +1011,7 @@ function stripPrefix(path) {
 function commonPrefix(paths) {
     if (!paths.length) return "";
     let p = paths[0];
-    paths.forEach(function (q) { while (p && q.indexOf(p) !== 0) p = p.slice(0, -1); });
+    paths.forEach(q => { while (p && q.indexOf(p) !== 0) p = p.slice(0, -1); });
     return p.slice(0, p.lastIndexOf("/") + 1);
 }
 
@@ -1022,26 +1036,28 @@ const search = { hits: [], stale: [], cur: -1, applied: null, re: null, gen: 0, 
 // The browser can only search the lines it holds; in view mode the counter
 // additionally shows the whole-file total, counted server-side (debounced —
 // a full-file scan per keystroke would be wasteful on huge files).
-let countTimer = 0, countSeq = 0;
+let countTimer = 0, countSeq = 0, countAbort = null;
 function scheduleFileCount() {
     clearTimeout(countTimer);
+    if (countAbort) { countAbort.abort(); countAbort = null; } // a superseded count must not keep scanning the file
     search.fileTotal = null;
     if (DEMO || state.mode !== "view" || !state.file || state.file.all || state.file.local || !search.re) return;
     const seq = ++countSeq;
     const q = search.applied;
     const path = state.file.path;
-    countTimer = setTimeout(async function () {
+    countTimer = setTimeout(async () => {
+        const ac = countAbort = new AbortController();
         let total = null;
         try {
             const p = searchParams(new URLSearchParams({ q: q, count: "1", path: path }));
-            const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString());
+            const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString(), { signal: ac.signal });
             if (!resp.ok) return;
             // NDJSON: skip the progress lines, take the counts line.
-            for (const line of (await resp.text()).split("\n")) {
-                if (!line) continue;
+            await readLines(resp.body, line => {
+                if (!line) return;
                 const obj = JSON.parse(line);
                 if (obj.counts) total = obj.counts.length ? obj.counts[0].n : 0;
-            }
+            });
         } catch (e) { return; }
         if (seq !== countSeq || total === null) return;
         search.fileTotal = total;
@@ -1060,6 +1076,7 @@ function searchReset() {
     search.re = null;
     search.fileTotal = null;
     clearTimeout(countTimer);
+    if (countAbort) { countAbort.abort(); countAbort = null; }
     countSeq++;
     updateSearchCount();
 }
@@ -1177,7 +1194,7 @@ function searchApply(done) {
     }
     scheduleFileCount(); // view mode: the whole-file total, counted server-side
     let i = 0;
-    const step = function () {
+    const step = () => {
         if (gen !== search.gen) return; // superseded: the newer pass owns the cleanup
         const t0 = performance.now();
         while (search.stale.length) {
@@ -1204,9 +1221,9 @@ function searchApply(done) {
 function searchStep(dir) {
     if (search.applied !== state.filter) searchApply(); // Enter right after typing: apply now
     // The scrollback trim may have dropped hits from the DOM; prune them.
-    if (search.hits.some(function (s) { return !s.isConnected; })) {
+    if (search.hits.some(s => !s.isConnected)) {
         const cur = search.cur >= 0 ? search.hits[search.cur] : null;
-        search.hits = search.hits.filter(function (s) { return s.isConnected; });
+        search.hits = search.hits.filter(s => s.isConnected);
         search.cur = cur ? search.hits.indexOf(cur) : -1;
     }
     if (!search.hits.length) return;
@@ -1232,7 +1249,7 @@ function viewSettled() {
         logview.locate = null;
         toast("line not found");
     }
-    searchApply(function () {
+    searchApply(() => {
         const i = selAnchor ? search.hits.indexOf(selAnchor) : -1;
         if (i >= 0) {
             search.cur = i; // ▲▼ step onward from the clicked line
@@ -1251,11 +1268,11 @@ function viewSettled() {
 // clickable per-line path prefix in multi-file streams). When the clicked
 // line's text is given, the view scrolls to that line and highlights it.
 function jumpToFile(path, text) {
-    const i = state.files.findIndex(function (f) { return !f.all && f.path === path; });
+    const i = state.files.findIndex(f => !f.all && f.path === path);
     if (i < 0) return;
     el["file-select"].value = String(i);
     state.file = state.files[i];
-    state.mode = "view"; // "view": the complete file (syncModeOptions syncs the select)
+    state.mode = "view";
     // Keep the query: a view hides nothing, so a find's search carries over
     // and its matches arrive already highlighted (viewSettled lands on the
     // clicked line, or the first match when it is gone).
@@ -1300,30 +1317,18 @@ async function addLocalFile(file) {
         stream = stream.pipeThrough(new DecompressionStream("gzip"));
     }
     const lines = [];
-    let buf = "";
-    const push = function (l) {
-        lines.push(l);
-        if (lines.length > MAX_LINES + TRIM_CHUNK) lines.splice(0, lines.length - MAX_LINES);
-    };
     try {
-        const reader = stream.getReader();
-        const dec = new TextDecoder();
-        for (; ;) {
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            buf += dec.decode(chunk.value, { stream: true });
-            const parts = buf.split(/\r\n|[\r\n]/); // LF, CRLF and CR-only files
-            buf = parts.pop();
-            parts.forEach(push);
-        }
+        await readLines(stream, l => {
+            lines.push(l);
+            if (lines.length > MAX_LINES + TRIM_CHUNK) lines.splice(0, lines.length - MAX_LINES);
+        });
     } catch (err) {
         toast("cannot read " + file.name + ": " + err.message);
         return;
     }
-    if (buf) push(buf);
 
     const entry = { path: file.name, local: true, lines: lines };
-    const i = localFiles.findIndex(function (f) { return f.path === file.name; });
+    const i = localFiles.findIndex(f => f.path === file.name);
     if (i >= 0) localFiles[i] = entry; else localFiles.push(entry);
 
     await refreshFiles();
@@ -1347,7 +1352,7 @@ async function refreshFiles() {
 
     const prev = state.file && (state.file.scope || state.file.path);
     state.files = [];
-    state.prefix = commonPrefix(data.map(function (e) { return e.path; }));
+    state.prefix = commonPrefix(data.map(e => e.path));
     el["file-select"].replaceChildren();
 
     el["file-select"].add(new Option("All files", "0"));
@@ -1358,27 +1363,27 @@ async function refreshFiles() {
     // holding all of them would just duplicate "All files", so it is skipped.
     const groups = [];
     const counts = {};
-    data.forEach(function (entry) {
+    data.forEach(entry => {
         let d = entry.path;
         for (let i = d.lastIndexOf("/"); i > 0; i = d.lastIndexOf("/")) {
             d = d.slice(0, i);
             counts[d] = (counts[d] || 0) + 1;
         }
     });
-    Object.keys(counts).filter(function (d) { return counts[d] < data.length; })
-        .forEach(function (d) { groups.push({ path: d, scope: d + "/", all: true, dir: true }); });
+    Object.keys(counts).filter(d => counts[d] < data.length)
+        .forEach(d => groups.push({ path: d, scope: d + "/", all: true, dir: true }));
 
     // Also group files sharing a name prefix (cut at . - _), e.g. two hosts
     // logging as 192.168.1.5.log and 192.168.1.22.log yield "▸ 192.168.1*",
     // selectable for tail and find like a folder. Only maximal prefixes
     // matching ≥2 files are offered, and none that just mirror a directory.
     const dirTotals = {};
-    data.forEach(function (e) {
+    data.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         dirTotals[dir] = (dirTotals[dir] || 0) + 1;
     });
     const nameGroups = {};
-    data.forEach(function (e) {
+    data.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
         const base = e.path.slice(dir.length);
         for (let i = 1; i < base.length; i++) {
@@ -1388,14 +1393,13 @@ async function refreshFiles() {
             }
         }
     });
-    Object.keys(nameGroups).filter(function (p) {
+    Object.keys(nameGroups).filter(p => {
         const dir = p.slice(0, p.lastIndexOf("/") + 1);
         if (nameGroups[p] < 2 || nameGroups[p] === dirTotals[dir]) return false;
         // Keep only the longest prefix naming this same group of files.
-        return !Object.keys(nameGroups).some(function (q) {
-            return q !== p && q.indexOf(p) === 0 && nameGroups[q] === nameGroups[p];
-        });
-    }).forEach(function (p) { groups.push({ path: p, scope: p, all: true }); });
+        return !Object.keys(nameGroups).some(q =>
+            q !== p && q.indexOf(p) === 0 && nameGroups[q] === nameGroups[p]);
+    }).forEach(p => groups.push({ path: p, scope: p, all: true }));
 
     // Render groups and files as one tree: sorted by path, each entry nests
     // under the closest group whose scope string-prefixes it — the same rule
@@ -1405,11 +1409,11 @@ async function refreshFiles() {
     // its base name. Every ancestor folder below the common prefix is offered,
     // so a file's base name is never ambiguous.
     const stack = []; // scopes of the groups enclosing the current entry
-    groups.concat(data).sort(function (a, b) {
+    groups.concat(data).sort((a, b) => {
         const ka = a.scope || a.path, kb = b.scope || b.path;
         if (ka !== kb) return ka < kb ? -1 : 1;
         return (a.all ? 0 : 1) - (b.all ? 0 : 1); // a group precedes a file of the same name
-    }).forEach(function (en) {
+    }).forEach(en => {
         const key = en.scope || en.path;
         while (stack.length && key.indexOf(stack[stack.length - 1]) !== 0) stack.pop();
         let label;
@@ -1424,20 +1428,20 @@ async function refreshFiles() {
         } else {
             label = en.path.slice(en.path.lastIndexOf("/") + 1) + (en.stale ? "  (archived)" : "");
         }
-        const indent = "\u00A0\u00A0\u00A0".repeat(stack.length); // nbsp: <option> would collapse plain spaces
+        const indent = "   ".repeat(stack.length); // nbsp: <option> would collapse plain spaces
         el["file-select"].add(new Option(indent + label, String(state.files.length)));
         state.files.push(en);
         if (en.all) stack.push(en.scope);
     });
 
     // Dropped files close the list, visibly local.
-    localFiles.forEach(function (f) {
+    localFiles.forEach(f => {
         el["file-select"].add(new Option("⬇ " + f.path + " (local)", String(state.files.length)));
         state.files.push(f);
     });
 
     // Restore the previous selection by path/scope, else select the first entry.
-    let i = state.files.findIndex(function (f) { return (f.scope || f.path) === prev; });
+    let i = state.files.findIndex(f => (f.scope || f.path) === prev);
     if (i < 0) i = state.files.length ? 0 : -1;
     state.file = i >= 0 ? state.files[i] : null;
     if (i >= 0) el["file-select"].value = String(i);
@@ -1453,44 +1457,39 @@ function updateDownload() {
     }
 }
 
-// applyFilter runs a find (state.filter tracks the input on every keystroke).
-// Tail and view never route here — their input searches as you type.
-function applyFilter() {
-    connect(); // even unchanged: Enter or the button means "search now"
-}
-
 function init() {
-    MODES.forEach(function (m) { el["mode-select"].add(new Option(m.label, m.value)); });
+    MODES.forEach(m => el["mode-select"].add(new Option(m)));
     el["mode-select"].value = state.mode;
-    el["mode-select"].onchange = function () { state.mode = el["mode-select"].value; connect(); };
+    el["mode-select"].onchange = () => { state.mode = el["mode-select"].value; connect(); };
 
     el["filter-input"].value = state.filter;
     // Tail and view search as you type, debounced; a keystroke immediately
     // cancels the in-flight highlight pass (search.gen) so typing stays
     // responsive on a large scrollback. Enter steps to the next match
     // (Shift+Enter to the previous), like a browser's find. Find keeps
-    // deliberate application: Enter or the button.
+    // deliberate application: Enter or the button, even with the query
+    // unchanged — they mean "search now".
     let searchTimer = 0;
-    el["filter-input"].addEventListener("input", function () {
+    el["filter-input"].addEventListener("input", () => {
         state.filter = el["filter-input"].value;
         if (!searchableMode()) return; // find applies deliberately, on Enter or the button
         search.gen++; // cancel the in-flight pass right away
         clearTimeout(searchTimer);
         searchTimer = setTimeout(searchApply, 300);
     });
-    el["filter-input"].addEventListener("keyup", function (e) {
+    el["filter-input"].addEventListener("keyup", e => {
         if (e.key !== "Enter") return;
         if (searchableMode()) {
             clearTimeout(searchTimer);
             searchStep(e.shiftKey ? -1 : 1); // re-applies first if the text changed
         } else {
-            applyFilter();
+            connect();
         }
     });
-    el["filter-apply"].onclick = applyFilter;
-    el["search-prev"].onclick = function () { searchStep(-1); };
-    el["search-next"].onclick = function () { searchStep(1); };
-    el["search-count"].addEventListener("click", function () {
+    el["filter-apply"].onclick = () => connect();
+    el["search-prev"].onclick = () => searchStep(-1);
+    el["search-next"].onclick = () => searchStep(1);
+    el["search-count"].addEventListener("click", () => {
         if (el["search-count"].classList.contains("more")) continueSearch();
     });
 
@@ -1503,7 +1502,7 @@ function init() {
     // the last-clicked line (or acts as a plain click when there is no anchor).
     // A drag that selected text is not a line click, and clicking the empty
     // space below the lines clears the selection.
-    el["scrollable"].addEventListener("click", function (e) {
+    el["scrollable"].addEventListener("click", e => {
         const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey;
         if (plain && e.target.classList.contains("path-link")) {
             jumpToFile(e.target.dataset.path, contentText(e.target.parentNode));
@@ -1515,60 +1514,51 @@ function init() {
             return;
         }
         if (!window.getSelection().isCollapsed) return; // text drag-select, not a line click
-        const clearAll = function () {
-            for (const s of el["logview"].querySelectorAll(".log-entry.selected")) {
-                s.classList.remove("selected");
-            }
-        };
         const entry = e.target.closest(".log-entry");
-        if (!entry) { clearAll(); selAnchor = null; return; } // click-away deselects
+        if (!entry) { clearSelection(); selAnchor = null; return; } // click-away deselects
         if (e.shiftKey && selAnchor && selAnchor.isConnected) {
             const a = logview.lines.indexOf(selAnchor), b = logview.lines.indexOf(entry);
             for (let i = Math.min(a, b); i <= Math.max(a, b) && i >= 0; i++) {
                 logview.lines[i].classList.add("selected");
             }
         } else if (plain && entry.classList.contains("selected")) {
-            clearAll(); // clicking a highlighted line unhighlights
+            clearSelection(); // clicking a highlighted line unhighlights
         } else {
-            if (plain) clearAll();
+            if (plain) clearSelection();
             entry.classList.toggle("selected"); // plain: select this one; ctrl: toggle
             selAnchor = entry.classList.contains("selected") ? entry : selAnchor;
         }
     });
     // Drag a log file anywhere onto the page to view it — read locally,
     // never uploaded (in the demo this is the only data source).
-    document.addEventListener("dragover", function (e) {
+    document.addEventListener("dragover", e => {
         e.preventDefault();
         document.body.classList.add("dragging");
     });
-    document.addEventListener("dragleave", function () {
-        document.body.classList.remove("dragging");
-    });
-    document.addEventListener("drop", function (e) {
+    document.addEventListener("dragleave", () => document.body.classList.remove("dragging"));
+    document.addEventListener("drop", e => {
         e.preventDefault();
         document.body.classList.remove("dragging");
         for (const f of e.dataTransfer.files) addLocalFile(f);
     });
 
     // Shift+click must not trigger the browser's native text selection.
-    el["scrollable"].addEventListener("mousedown", function (e) {
+    el["scrollable"].addEventListener("mousedown", e => {
         if (e.shiftKey) e.preventDefault();
     });
     // Nothing scrolls programmatically during a load, so any scroll (past the
     // clamp-to-0 that clearing the view fires) means the user started reading.
-    el["scrollable"].addEventListener("scroll", function () {
+    el["scrollable"].addEventListener("scroll", () => {
         if (logview.loading && el["scrollable"].scrollTop > 0) logview.userScrolled = true;
     });
 
     // Ctrl-C with highlighted lines copies exactly those lines — unless the
     // user drag-selected text just now (the more recent, explicit intent) or is
     // in an input. Escape clears the selection.
-    document.addEventListener("keydown", function (e) {
+    document.addEventListener("keydown", e => {
         if (e.key === "Escape") {
             if (!el["menu"].hidden) { el["menu"].hidden = true; return; }
-            for (const s of el["logview"].querySelectorAll(".log-entry.selected")) {
-                s.classList.remove("selected");
-            }
+            clearSelection();
             selAnchor = null;
             return;
         }
@@ -1578,15 +1568,15 @@ function init() {
         const sel = el["logview"].querySelectorAll(".log-entry.selected");
         if (!sel.length) return; // no highlights: native copy
         e.preventDefault();
-        const text = Array.from(sel).map(function (s) { return s.textContent; }).join("\n");
+        const text = Array.from(sel).map(s => s.textContent).join("\n");
         navigator.clipboard.writeText(text).then(
-            function () { toast(sel.length + (sel.length === 1 ? " line copied" : " lines copied")); },
-            function () { toast("copy failed"); }
+            () => toast(sel.length + (sel.length === 1 ? " line copied" : " lines copied")),
+            () => toast("copy failed")
         );
     });
 
     el["file-select"].addEventListener("focus", refreshFiles);
-    el["file-select"].onchange = function () {
+    el["file-select"].onchange = () => {
         state.file = state.files[Number(el["file-select"].value)];
         updateDownload();
         syncModeOptions(); // single files open in view; groups tail
@@ -1597,28 +1587,28 @@ function init() {
     // right away — and the find too when results are showing (the toggle is
     // as deliberate as the button). Focus returns to the input, like an
     // editor's find widget.
-    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"]].forEach(function (t) {
-        const btn = el[t[0]], key = t[1];
+    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"]].forEach(([id, key]) => {
+        const btn = el[id];
         btn.classList.toggle("on", settings[key]);
-        btn.onclick = function () {
+        btn.onclick = () => {
             settings[key] = !settings[key];
             btn.classList.toggle("on", settings[key]);
             saveSettings();
             updateFilterHints(); // the placeholder's "(regexp)" follows the toggle
             el["filter-input"].focus();
             if (searchableMode()) searchApply();
-            else if (state.filter) applyFilter();
+            else if (state.filter) connect();
         };
     });
 
-    // The find-shape selects: matches per file for group finds ("all" is the
-    // server cap of 100 — a single-file find always uses that) and the
-    // context lines around each match. Changing one re-runs a shown find.
-    FIND_MATCHES.forEach(function (n) { el["find-matches"].add(new Option(n === 100 ? "all (100)" : String(n), String(n))); });
-    FIND_CTX.forEach(function (n) { el["find-ctx"].add(new Option("±" + n, String(n))); });
+    // The find-shape selects: matches per file for group finds (100 is the
+    // server's cap — a single-file find always uses it) and the context
+    // lines around each match. Changing one re-runs a shown find.
+    FIND_MATCHES.forEach(n => el["find-matches"].add(new Option(String(n))));
+    FIND_CTX.forEach(n => el["find-ctx"].add(new Option("±" + n, String(n))));
     el["find-matches"].value = String(settings.findMatches);
     el["find-ctx"].value = String(settings.findCtx);
-    el["find-matches"].onchange = el["find-ctx"].onchange = function () {
+    el["find-matches"].onchange = el["find-ctx"].onchange = () => {
         settings.findMatches = Number(el["find-matches"].value);
         settings.findCtx = Number(el["find-ctx"].value);
         saveSettings();
@@ -1628,34 +1618,31 @@ function init() {
     // ☰ settings menu: the button toggles it; a click anywhere else or
     // Escape closes it (this click listener sees the opening click too — the
     // closest() checks keep it from closing the menu it just opened).
-    el["menu-toggle"].onclick = function () { el["menu"].hidden = !el["menu"].hidden; };
-    document.addEventListener("click", function (e) {
+    el["menu-toggle"].onclick = () => { el["menu"].hidden = !el["menu"].hidden; };
+    document.addEventListener("click", e => {
         if (!el["menu"].hidden && !e.target.closest("#menu") && !e.target.closest("#menu-toggle")) {
             el["menu"].hidden = true;
         }
     });
 
-    el["cfg-wrap"].checked = settings.wrap;
+    // The ☰ checkboxes, each persisting its setting and applying it: wrap
+    // toggles the logview class, "find in archives" re-runs a shown find,
+    // "live view" reconnects — to follow, or to stop following.
+    [
+        ["cfg-wrap", "wrap", () => el["logview"].classList.toggle("wrap", settings.wrap)],
+        ["cfg-archives", "archives", () => { if (state.mode === "find" && state.filter) connect(); }],
+        ["cfg-live", "live", () => { if (state.mode === "view") connect(); }],
+    ].forEach(([id, key, apply]) => {
+        el[id].checked = settings[key];
+        el[id].onchange = () => {
+            settings[key] = el[id].checked;
+            saveSettings();
+            apply();
+        };
+    });
     el["logview"].classList.toggle("wrap", settings.wrap);
-    el["cfg-wrap"].onchange = function () {
-        settings.wrap = el["cfg-wrap"].checked;
-        saveSettings();
-        el["logview"].classList.toggle("wrap", settings.wrap);
-    };
-    el["cfg-archives"].checked = settings.archives;
-    el["cfg-archives"].onchange = function () {
-        settings.archives = el["cfg-archives"].checked;
-        saveSettings();
-        if (state.mode === "find" && state.filter) connect(); // re-run the shown find
-    };
-    el["cfg-live"].checked = settings.live;
-    el["cfg-live"].onchange = function () {
-        settings.live = el["cfg-live"].checked;
-        saveSettings();
-        if (state.mode === "view") connect(); // reconnect: follow, or stop following
-    };
 
-    refreshFiles().then(function () { updateDownload(); connect(); });
+    refreshFiles().then(() => { updateDownload(); connect(); });
 }
 
 init();
