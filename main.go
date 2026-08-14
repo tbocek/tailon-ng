@@ -26,9 +26,9 @@ depth). Directories are served recursively, and new files are picked up as they
 appear. Several paths can be given as separate arguments.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) never get
-appended, so they stay hidden until the "gz" toggle (web UI, in find
-mode's search input) turns them on: the file selector then lists them, and find searches
-them too, decompressed transparently.
+appended, so they are never tailed — but the file selector lists them and find
+searches them too, decompressed transparently. The web UI's "archives" switch
+(in the hamburger menu, on by default) leaves them out of both.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.

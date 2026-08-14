@@ -169,11 +169,15 @@ func queryInt(query url.Values, name string, def, lo, hi int) int {
 	return min(n, hi)
 }
 
-// findMatch is one search hit with its surrounding lines.
+// findMatch is one search hit with its surrounding lines. Gap reports whether
+// lines were skipped between the end of the previous hit's excerpt and the
+// start of this one, so the UI only draws a separator where something really
+// was left out.
 type findMatch struct {
 	Before []string `json:"before"`
 	Text   string   `json:"text"`
 	After  []string `json:"after"`
+	Gap    bool     `json:"gap"`
 }
 
 // findResult groups one file's hits.
@@ -388,11 +392,15 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 // lines that do NOT match), each with up to ctxLines lines of context on
 // both sides, stopping as soon as the last hit's after-context is complete —
 // a scan rarely reads the whole file. A hit inside a previous hit's
-// after-context merges into that excerpt instead of starting its own.
+// after-context merges into that excerpt instead of starting its own, and no
+// line is ever returned twice: a hit's before-context starts after the last
+// line already returned, and Gap marks the excerpts a skip precedes.
 func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool, nRead *int64, maxMatches, ctxLines int) []findMatch {
 	var ring []string // the last ctxLines lines, before-context for the next hit
 	var hits []findMatch
+	lineNo, lastShown := 0, 0 // the current line, and the last one returned
 	scanLines(ctx, path, nRead, func(line string) bool {
+		lineNo++
 		// Every line first serves as after-context for the open hits. A
 		// matching line consumed that way is already shown (the client
 		// highlights matches wherever they appear, context included), so it
@@ -406,12 +414,24 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool
 				shown = true
 			}
 		}
-		if !shown && len(hits) < maxMatches && re.MatchString(line) != invert {
+		if shown {
+			lastShown = lineNo
+		} else if len(hits) < maxMatches && re.MatchString(line) != invert {
+			// The ring holds lines first…lineNo-1. Drop the ones a previous
+			// hit already returned as its after-context: repeating them is
+			// what made excerpts overlap, and the run then reads as one
+			// unbroken stretch — no separator to draw.
+			before := ring
+			if first := lineNo - len(ring); lastShown >= first {
+				before = ring[lastShown-first+1:]
+			}
 			hits = append(hits, findMatch{
-				Before: append([]string{}, ring...),
+				Before: append([]string{}, before...),
 				Text:   line,
 				After:  []string{},
+				Gap:    len(hits) > 0 && lineNo-len(before) > lastShown+1,
 			})
+			lastShown = lineNo
 			complete = ctxLines == 0 // with context, wait for this hit's after-lines
 		}
 		if ring = append(ring, line); len(ring) > ctxLines {

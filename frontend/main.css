@@ -130,8 +130,6 @@ body {
    button carries the accent. */
 #toolbar .input-wrap { position: relative; display: flex; flex: 1 1 auto; min-width: 3em; }
 #filter-input { width: 100%; padding-right: 64px; text-align: left; }
-/* Find mode shows a fourth toggle (gz); reserve its width too. */
-.input-wrap.finding #filter-input { padding-right: 88px; }
 /* The browser's default (blue) focus ring clashes with the theme and draws
    underneath the inset toggles; mark focus on the input's own border in the
    accent color instead. */
@@ -271,9 +269,27 @@ body {
 
 /* The per-line file prefix in multi-file streams: click to open that file.
    Each file carries a stable muted color (--fc, set per line from the JS
-   palette) so interleaved files are told apart at a glance. */
+   palette) so interleaved files are told apart at a glance. .line-prefix wraps
+   the whole thing — name, gz shortcut and ": " — so the search and the copy
+   can tell chrome from file content in one check. */
 #logview .path-link { color: var(--fc, #8a8f98); cursor: pointer; }
 #logview .path-link:hover { color: var(--notice); text-decoration: underline; }
+/* The gz shortcut, shown only beside files that have rotations: one click
+   finds through that file and all of its archives. The label is generated
+   content on purpose — that keeps it out of textContent, so it never lands in
+   a copied line or in what the search matches against. */
+#logview .gz-link {
+    margin-left: 4px;
+    padding: 0 2px;
+    border: 1px solid #4a4f57;
+    border-radius: 2px;
+    color: #8a8f98;
+    font-size: 10px; /* small, but its box still fits inside the 13px/1.3 line */
+    cursor: pointer;
+    user-select: none;
+}
+#logview .gz-link::after { content: "gz"; }
+#logview .gz-link:hover { color: var(--notice); border-color: var(--notice); }
 
 /* Find mode: one block per file, separated by an accent-colored rule. The
    header opens the complete file with the first match selected; context lines

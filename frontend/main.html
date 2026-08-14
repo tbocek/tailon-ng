@@ -31,7 +31,6 @@
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
-                <button id="opt-archives" title="Archives: list rotated archives (.gz, .1, …) in the selector and search them in find" hidden>gz</button>
             </span>
         </span>
         <select id="find-matches" title="Matches shown per file" hidden></select>
@@ -50,6 +49,7 @@
     <div id="menu" hidden>
         <label><input id="cfg-wrap" type="checkbox"> wrap lines</label>
         <label><input id="cfg-live" type="checkbox"> live view</label>
+        <label title="List rotated archives (.gz, .1, …) in the file selector and search them in find"><input id="cfg-archives" type="checkbox"> archives</label>
         <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">version {{.Version}}</a>
     </div>
     <div id="loading" hidden></div>

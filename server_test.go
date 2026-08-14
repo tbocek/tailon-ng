@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -750,6 +752,54 @@ func TestStreamReset(t *testing.T) {
 
 // TestFindHandler checks the bounded server-side search: matches with context,
 // the per-file cap, archive inclusion via stale=1, and input validation.
+// Excerpts must never repeat a line, and must only claim an elision where
+// there really is one: hits close together run into a single unbroken stretch,
+// distant ones do not.
+func TestFindInFileNoOverlap(t *testing.T) {
+	dir := t.TempDir()
+	var lines []string
+	for i := 1; i <= 24; i++ {
+		switch i {
+		case 5, 7, 9, 20:
+			lines = append(lines, fmt.Sprintf("needle %d", i))
+		default:
+			lines = append(lines, fmt.Sprintf("filler %d", i))
+		}
+	}
+	path := filepath.Join(dir, "a.log")
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+
+	var nRead int64
+	hits := findInFile(context.Background(), path, regexp.MustCompile("needle"), false, &nRead, 10, 3)
+
+	// Line 7 falls inside line 5's after-context: already shown, so it merges
+	// there instead of opening an excerpt of its own.
+	if len(hits) != 3 {
+		t.Fatalf("expected 3 excerpts, got %d: %+v", len(hits), hits)
+	}
+	for i, want := range []string{"needle 5", "needle 9", "needle 20"} {
+		if hits[i].Text != want {
+			t.Errorf("excerpt %d matched %q, want %q", i, hits[i].Text, want)
+		}
+	}
+
+	// Lines 6-8 are line 5's after-context; line 9's before-context must start
+	// past them, leaving the two excerpts adjacent — nothing skipped, nothing
+	// repeated. Line 20 sits well beyond, so that one is a real gap.
+	if want := []bool{false, false, true}; !reflect.DeepEqual([]bool{hits[0].Gap, hits[1].Gap, hits[2].Gap}, want) {
+		t.Errorf("gaps = %v, want %v", []bool{hits[0].Gap, hits[1].Gap, hits[2].Gap}, want)
+	}
+
+	seen := map[string]int{}
+	for _, h := range hits {
+		for _, l := range append(append(append([]string{}, h.Before...), h.Text), h.After...) {
+			if seen[l]++; seen[l] > 1 {
+				t.Errorf("line %q returned %d times", l, seen[l])
+			}
+		}
+	}
+}
+
 func TestFindHandler(t *testing.T) {
 	dir := t.TempDir()
 	var lines []string

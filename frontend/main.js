@@ -36,31 +36,39 @@ const state = {
     files: [], file: null, mode: "tail", filter: "",
     source: null,
     prefix: "", // directory prefix shared by every served file, hidden in the UI
+    archived: new Set(), // live files that have rotated archives on disk
 };
 
 // User settings, persisted in localStorage. The search toggles inside the
 // input (VS Code-style) shape how the query matches — regex off searches the
 // literal text, caseSense off ignores case, invert keeps the lines that do
 // NOT match — and apply to the browser-side search and the server-side find
-// alike, and archives (the gz toggle) lists rotated archives in the file
-// selector and widens a find to them.
+// alike.
 // findMatches/findCtx shape a find's results (see FIND_MATCHES).
-// The ☰ menu holds the rest: wrap (line wrapping) and live (a view keeps
-// following the file after its backlog; off reads it once).
+// The ☰ menu holds the rest: wrap (line wrapping), live (a view keeps
+// following the file after its backlog; off reads it once) and archives (list
+// rotated archives in the file selector and widen a find to them).
 const SETTINGS_KEY = "tailon-settings";
+// Bumped when a default changes in a way a stored value must not undo. Only
+// the settings named below are reset; everything else the user chose survives.
+const SETTINGS_VERSION = 2;
+const RESET_ON_UPGRADE = ["archives"]; // v2: archives moved to ☰ and defaults on
 const settings = {
     regex: true, caseSense: true, invert: false,
     findMatches: 3, findCtx: 3,
-    wrap: false, archives: false, live: true,
+    wrap: false, archives: true, live: true,
 };
 try { // no localStorage (or corrupt content): the defaults stand
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+    if (saved.version !== SETTINGS_VERSION) RESET_ON_UPGRADE.forEach(k => delete saved[k]);
     for (const k in settings) if (typeof saved[k] === typeof settings[k]) settings[k] = saved[k];
 } catch (e) { }
 if (FIND_MATCHES.indexOf(settings.findMatches) < 0) settings.findMatches = 3;
 if (FIND_CTX.indexOf(settings.findCtx) < 0) settings.findCtx = 3;
 function saveSettings() {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { }
+    try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, version: SETTINGS_VERSION }));
+    } catch (e) { }
 }
 
 // buildRegex compiles the query per the search toggles: with regex off the
@@ -128,8 +136,8 @@ function cacheEntry() {
 const el = {};
 [
     "file-select", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
-    "opt-regex", "opt-case", "opt-invert", "opt-archives", "find-matches", "find-ctx",
-    "menu-toggle", "menu", "cfg-wrap", "cfg-live",
+    "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
+    "menu-toggle", "menu", "cfg-wrap", "cfg-live", "cfg-archives",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(id => el[id] = document.getElementById(id));
 
@@ -322,6 +330,10 @@ const logview = {
             const span = document.createElement("span");
             span.className = "log-entry";
             if (ln.path) {
+                // Chrome, not content — one wrapper so contentText and the
+                // search can skip the whole prefix in one check.
+                const pre = document.createElement("span");
+                pre.className = "line-prefix";
                 const link = document.createElement("a");
                 link.className = "path-link";
                 link.textContent = stripPrefix(ln.path);
@@ -329,8 +341,18 @@ const logview = {
                 link.dataset.path = ln.path;
                 // A custom property, not color: the hover accent must still win.
                 link.style.setProperty("--fc", fileColor(ln.path));
-                span.appendChild(link);
-                span.appendChild(document.createTextNode(": "));
+                pre.appendChild(link);
+                // Files with rotations get a gz shortcut beside the name: one
+                // click searches this file together with all of its archives.
+                if (state.archived.has(ln.path)) {
+                    const gz = document.createElement("a");
+                    gz.className = "gz-link"; // its "gz" label is CSS ::after
+                    gz.title = "find in " + stripPrefix(ln.path) + " and its archives";
+                    gz.dataset.path = ln.path;
+                    pre.appendChild(gz);
+                }
+                pre.appendChild(document.createTextNode(": "));
+                span.appendChild(pre);
             }
             appendAnsi(span, ln.text);
             // The line we were asked to jump to (compare with ANSI codes
@@ -406,13 +428,8 @@ function updateFilterHints() {
         (state.mode === "view" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
     el["search-prev"].hidden = el["search-next"].hidden = finding;
-    // The gz toggle and the find-shape selects appear only in find mode
-    // (matches-per-file only for group searches — a single-file find always
-    // lists all matches); the input reserves room for the fourth toggle. The
-    // archives setting itself outlives find mode: the selector keeps showing
-    // archives wherever gz was left on.
-    el["opt-archives"].hidden = !finding;
-    el["filter-input"].closest(".input-wrap").classList.toggle("finding", finding);
+    // The find-shape selects appear only in find mode (matches-per-file only
+    // for group searches — a single-file find always lists all matches).
     el["find-matches"].hidden = !finding || !state.file || !state.file.all;
     el["find-ctx"].hidden = !finding;
 }
@@ -562,7 +579,14 @@ let findAbort = null; // the in-flight find fetch; aborting it stops the server-
 let findMaxUsed = settings.findMatches; // the per-file cap the last find asked for
 async function findRequest() {
     const seq = ++findSeq;
-    if (!state.filter) { setStatus("enter a search"); return; }
+    // No query yet: show the files this find would scan, each with its empty
+    // count. The selection is the answer to "what am I about to search?", so
+    // it is worth showing before there is anything to show for it.
+    if (!state.filter) {
+        setLoading(false);
+        renderFind(filesInScope().map(path => ({ path: path, matches: [] })));
+        return;
+    }
     const ac = findAbort = new AbortController();
     setLoading(true);
     const p = new URLSearchParams({ q: state.filter });
@@ -605,6 +629,19 @@ async function findRequest() {
     renderFind(results);
 }
 
+// filesInScope lists the files a find would scan for the current selection —
+// the same set the server derives from path / all / scope, so an empty query
+// can name them without asking. Archives count only while they are listed,
+// which is exactly when the request would carry stale=1.
+function filesInScope() {
+    if (!state.file) return [];
+    if (!state.file.all) return [state.file.path];
+    const scope = state.file.scope || "";
+    return state.files
+        .filter(f => !f.all && !f.local && f.path.indexOf(scope) === 0 && (settings.archives || !f.stale))
+        .map(f => f.path);
+}
+
 // renderFind shows each file's hits with dimmed context, one block per file
 // separated by a rule. Clicking a file header opens the complete file with its
 // first match selected; the result lines select and copy like any others.
@@ -629,11 +666,13 @@ function renderFind(results) {
         head.className = "find-file";
         head.textContent = stripPrefix(f.path) + " — " + (n >= findMaxUsed ? findMaxUsed + "+" : n) + (n === 1 ? " match" : " matches");
         head.dataset.path = f.path;
-        head.dataset.text = f.matches[0].text;
+        if (n) head.dataset.text = f.matches[0].text; // absent with no query: open at the top
         head.title = "open " + f.path;
         frag.appendChild(head);
         f.matches.forEach((m, i) => {
-            if (i) {
+            // Only where the server skipped lines: consecutive excerpts run
+            // straight on, and eliding nothing would be a lie.
+            if (i && m.gap) {
                 const gap = document.createElement("div");
                 gap.className = "find-gap";
                 gap.textContent = "···";
@@ -767,9 +806,9 @@ function unmark(entry) {
 // prefix is UI chrome, not file text — the server-side find and counter
 // never see it, and the browser search must match the same thing.
 function contentText(entry) {
-    const link = entry.firstChild;
-    return link && link.nodeType === 1 && link.classList.contains("path-link")
-        ? entry.textContent.slice(link.textContent.length + 2)
+    const pre = entry.firstChild;
+    return pre && pre.nodeType === 1 && pre.classList.contains("line-prefix")
+        ? entry.textContent.slice(pre.textContent.length)
         : entry.textContent;
 }
 
@@ -782,11 +821,9 @@ function markText(entry, re) {
     const nodes = [];
     for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
     for (const node of nodes) {
-        // Like contentText: never mark inside the path link or its ": "
-        // separator — the prefix is not part of the line's content.
-        const prev = node.previousSibling;
-        if (node.parentNode.closest(".path-link") ||
-            (prev && prev.nodeType === 1 && prev.classList.contains("path-link"))) continue;
+        // Like contentText: never mark inside the "file: " prefix — its name,
+        // gz shortcut and separator are not part of the line's content.
+        if (node.parentNode.closest(".line-prefix")) continue;
         const text = node.nodeValue;
         let m, last = 0, frag = null;
         re.lastIndex = 0;
@@ -932,6 +969,36 @@ function jumpToFile(path, text) {
     connect(text !== undefined ? text.replace(ANSI_RE, "") : null);
 }
 
+// archiveEntry is the selector entry covering a file together with its rotated
+// archives: the "▸ name*" group the tree offers when several files share that
+// prefix, or — for a file with a single archive, too few to group — an ad-hoc
+// scope over the same prefix, appended so the selector can show it too.
+function archiveEntry(path) {
+    const found = state.files.find(f => f.all && f.scope === path);
+    if (found) return found;
+    const en = { path: path, scope: path, all: true, label: "▸ " + path.slice(path.lastIndexOf("/") + 1) + "*" };
+    state.files.push(en);
+    return en;
+}
+
+// findArchives searches a file and its rotations at once — the gz shortcut
+// beside a line's filename. The archives have to be listed for the group to
+// exist at all, so it turns that setting on when the ☰ menu has it off.
+async function findArchives(path) {
+    if (!settings.archives) {
+        settings.archives = true;
+        el["cfg-archives"].checked = true;
+        saveSettings();
+        await refreshFiles();
+    }
+    state.file = archiveEntry(path);
+    comboDisplay();
+    state.mode = "find";
+    updateDownload();
+    syncModeOptions();
+    connect();
+}
+
 // syncModeOptions matches the mode options to the selected entry: "tail" is
 // disabled for a rotated/compressed file (it will never grow), which is viewed
 // instead, and "view" is disabled for group entries (a whole-file dump of many
@@ -1006,6 +1073,20 @@ async function refreshFiles() {
     // decoded view even when they have no row of their own).
     const shown = settings.archives ? data : data.filter(e => !e.stale);
     state.prefix = commonPrefix(shown.map(e => e.path));
+
+    // An archive extends the name of the file it was rotated from
+    // (access.log → access.log.1.gz), so each stale entry names its live file:
+    // the longest proper prefix of it, within the same directory, that is
+    // served in its own right. Derived from the whole listing rather than from
+    // shown — the log view offers the gz shortcut either way.
+    const live = new Set(data.filter(e => !e.stale).map(e => e.path));
+    state.archived = new Set();
+    data.forEach(e => {
+        if (!e.stale) return;
+        for (let i = e.path.length - 1; i > 0 && e.path[i] !== "/"; i--) {
+            if (live.has(e.path.slice(0, i))) { state.archived.add(e.path.slice(0, i)); break; }
+        }
+    });
 
     state.files.push({ path: "", all: true, label: "All files" });
 
@@ -1238,7 +1319,11 @@ function init() {
     el["scrollable"].addEventListener("click", e => {
         const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey;
         if (plain && e.target.classList.contains("path-link")) {
-            jumpToFile(e.target.dataset.path, contentText(e.target.parentNode));
+            jumpToFile(e.target.dataset.path, contentText(e.target.closest(".log-entry")));
+            return;
+        }
+        if (plain && e.target.classList.contains("gz-link")) {
+            findArchives(e.target.dataset.path);
             return;
         }
         const head = plain && e.target.closest(".find-file");
@@ -1352,7 +1437,7 @@ function init() {
     // right away — and the find too when results are showing (the toggle is
     // as deliberate as the button). Focus returns to the input, like an
     // editor's find widget.
-    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"], ["opt-archives", "archives"]].forEach(([id, key]) => {
+    [["opt-regex", "regex"], ["opt-case", "caseSense"], ["opt-invert", "invert"]].forEach(([id, key]) => {
         const btn = el[id];
         btn.classList.toggle("on", settings[key]);
         btn.onclick = () => {
@@ -1391,11 +1476,15 @@ function init() {
     });
 
     // The ☰ checkboxes, each persisting its setting and applying it: wrap
-    // toggles the logview class and
-    // "live view" reconnects — to follow, or to stop following.
+    // toggles the logview class, "live view" reconnects — to follow, or to
+    // stop following — and "archives" rebuilds the file tree around the
+    // rotated files it adds or drops. That reconnects unconditionally: a
+    // find's file set changes with the setting, and a name group can appear or
+    // vanish with the archives that formed it, taking the selection with it.
     [
         ["cfg-wrap", "wrap", () => el["logview"].classList.toggle("wrap", settings.wrap)],
         ["cfg-live", "live", () => { if (state.mode === "view") connect(); }],
+        ["cfg-archives", "archives", () => refreshFiles().then(() => { updateDownload(); connect(); })],
     ].forEach(([id, key, apply]) => {
         el[id].checked = settings[key];
         el[id].onchange = () => {
