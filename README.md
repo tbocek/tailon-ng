@@ -125,12 +125,37 @@ and clicking it continues the search on the server, listing up to 100 matches
 across the whole file, each jumping back into the view at its line.
 
 Three editor-style toggles inside the input shape search and find alike:
-**Aa** match case, **.\*** regular expression (off searches the literal
-text), **!** invert (keep the lines that do *not* match, like `grep -v`). The
+**Aa** match case, **.\*** regular expression (off: plain text, see below),
+**!** invert (keep the lines that do *not* match, like `grep -v`). The
 **☰ menu** holds the remaining settings — **wrap lines**, **live view** (off
 makes a view read once) and **archives** (on by default: list rotated
 archives and search them too) — plus the running version. All toggles and
 settings persist in the browser (localStorage).
+
+**Plain-text queries** (**.\*** off) have a small syntax of their own, the
+same in search and find:
+
+- spaces separate terms, and a line matches if it contains **any** of them
+  (or);
+- a standalone `&&` needs **both** sides (and), binding tighter than the
+  space: `a b && c` is `a` or (`b` and `c`); glued to text, as in `a&&b`, it
+  is literal;
+- `"…"` makes one term of a phrase, spaces and `&&` included, and may start
+  mid-word (`user="bob smith"`);
+- `\"` is a literal quote and `\\` a literal backslash, inside quotes or out;
+  any other backslash is literal (`C:\logs`);
+- while you type, an unclosed quote runs to the end, and a dangling `&&` or
+  an empty `""` is ignored. Aa and ! apply to the whole expression, and
+  every term found in a matching line is highlighted.
+
+| Query | Matches lines containing |
+|---|---|
+| `error warn` | `error` or `warn` |
+| `error && nginx` | both `error` and `nginx` |
+| `error warn && nginx` | `error`, or both `warn` and `nginx` |
+| `"connection refused" timeout` | the phrase, or `timeout` |
+| `"a && b"` | the literal text `a && b` |
+| `"say \"hi\""` | `say "hi"` |
 
 Find results show each file as an orange header with its match count,
 followed by the matching lines and their context. With the search box still
@@ -138,9 +163,16 @@ empty, the headers alone are listed — the files that find is about to scan.
 Excerpts never repeat a line, and the `···` separator appears only between
 excerpts that really do have lines between them.
 
-**The file selector is a tree — and writable.** Subfolders, and groups of
-files sharing a name prefix (per-host logs, say), are selectable entries —
-tail or find everything under one of them. Typing into the selector filters
+**The file selector is a collapsible tree — and writable.** Subfolders, and
+groups of files sharing a name prefix (per-host logs, say), are selectable
+entries — tail or find everything under one of them. A live file and its
+rotations form one group too, folded into a single `access.log*  +14 archived`
+row. Groups start collapsed: click a ▸ (or press ArrowRight/Left) to open or
+close one, click its name to select it; the tree remembers what you opened
+and drops open at the current selection. **Ctrl+click** (⌘+click on a Mac,
+or Ctrl+Enter) picks several entries at once — files and groups mixed — and
+tails them as one merged stream, or finds across them. Typing into the
+selector filters
 the entries, prefix-matching each path segment (`ngi` finds `nginx/` anywhere
 in the tree); ArrowUp/Down and Enter select. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
 `.zst`, numeric `.1`, date-stamped `-YYYYMMDD`, `.old`, `.bak`) never get

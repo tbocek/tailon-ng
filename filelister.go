@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -228,4 +231,25 @@ func allowedFiles(prefix string) []string {
 	allFilesMu.RUnlock()
 	sort.Strings(names)
 	return names
+}
+
+// selectedFiles resolves an all=1 selection: the served files under any
+// scope prefix plus the exact paths given; everything when neither is.
+func selectedFiles(query url.Values) []string {
+	scopes, paths := query["scope"], query["path"]
+	if len(scopes) == 0 && len(paths) == 0 {
+		scopes = []string{""}
+	}
+	set := make(map[string]bool)
+	for _, s := range scopes {
+		for _, p := range allowedFiles(s) {
+			set[p] = true
+		}
+	}
+	for _, p := range paths {
+		if fileAllowed(p) {
+			set[p] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
 }

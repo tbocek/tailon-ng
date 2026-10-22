@@ -31,7 +31,7 @@ print("docs/demo.html: %d bytes" % len(html))
 
 # Keep the website's lines-of-code claim honest: count the real thing and
 # patch every "about N lines of code" occurrence (rounded to the nearest 100).
-go_files = ["main.go", "server.go", "tailer.go", "filelister.go", "frontend.go",
+go_files = ["main.go", "server.go", "tailer.go", "filelister.go", "terms.go", "frontend.go",
             "watcher_linux.go", "watcher_other.go"]
 def code_lines(path, comment):
     n = 0

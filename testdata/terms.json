@@ -1,0 +1,246 @@
+[
+ {
+  "q": "error warn",
+  "groups": [
+   [
+    "error"
+   ],
+   [
+    "warn"
+   ]
+  ]
+ },
+ {
+  "q": "  error \t warn  ",
+  "groups": [
+   [
+    "error"
+   ],
+   [
+    "warn"
+   ]
+  ]
+ },
+ {
+  "q": "error && nginx",
+  "groups": [
+   [
+    "error",
+    "nginx"
+   ]
+  ]
+ },
+ {
+  "q": "error warn && nginx",
+  "groups": [
+   [
+    "error"
+   ],
+   [
+    "warn",
+    "nginx"
+   ]
+  ]
+ },
+ {
+  "q": "a && b c && d",
+  "groups": [
+   [
+    "a",
+    "b"
+   ],
+   [
+    "c",
+    "d"
+   ]
+  ]
+ },
+ {
+  "q": "sshd && failed && root",
+  "groups": [
+   [
+    "sshd",
+    "failed",
+    "root"
+   ]
+  ]
+ },
+ {
+  "q": "\"connection refused\" timeout",
+  "groups": [
+   [
+    "connection refused"
+   ],
+   [
+    "timeout"
+   ]
+  ]
+ },
+ {
+  "q": "\"a && b\"",
+  "groups": [
+   [
+    "a && b"
+   ]
+  ]
+ },
+ {
+  "q": "\"&&\"",
+  "groups": [
+   [
+    "&&"
+   ]
+  ]
+ },
+ {
+  "q": "a \"&&\" b",
+  "groups": [
+   [
+    "a"
+   ],
+   [
+    "&&"
+   ],
+   [
+    "b"
+   ]
+  ]
+ },
+ {
+  "q": "\"say \\\"hi\\\"\"",
+  "groups": [
+   [
+    "say \"hi\""
+   ]
+  ]
+ },
+ {
+  "q": "say\\\"hi",
+  "groups": [
+   [
+    "say\"hi"
+   ]
+  ]
+ },
+ {
+  "q": "C:\\logs",
+  "groups": [
+   [
+    "C:\\logs"
+   ]
+  ]
+ },
+ {
+  "q": "a\\\\b",
+  "groups": [
+   [
+    "a\\b"
+   ]
+  ]
+ },
+ {
+  "q": "\\n",
+  "groups": [
+   [
+    "\\n"
+   ]
+  ]
+ },
+ {
+  "q": "a&&b",
+  "groups": [
+   [
+    "a&&b"
+   ]
+  ]
+ },
+ {
+  "q": "user=\"bob smith\" x",
+  "groups": [
+   [
+    "user=bob smith"
+   ],
+   [
+    "x"
+   ]
+  ]
+ },
+ {
+  "q": "\"unfinished phr",
+  "groups": [
+   [
+    "unfinished phr"
+   ]
+  ]
+ },
+ {
+  "q": "&& error",
+  "groups": [
+   [
+    "error"
+   ]
+  ]
+ },
+ {
+  "q": "error &&",
+  "groups": [
+   [
+    "error"
+   ]
+  ]
+ },
+ {
+  "q": "a && && b",
+  "groups": [
+   [
+    "a",
+    "b"
+   ]
+  ]
+ },
+ {
+  "q": "a \"\" b",
+  "groups": [
+   [
+    "a"
+   ],
+   [
+    "b"
+   ]
+  ]
+ },
+ {
+  "q": "a && \"\" b",
+  "groups": [
+   [
+    "a",
+    "b"
+   ]
+  ]
+ },
+ {
+  "q": "",
+  "groups": []
+ },
+ {
+  "q": "   ",
+  "groups": []
+ },
+ {
+  "q": "&&",
+  "groups": []
+ },
+ {
+  "q": "\"\"",
+  "groups": []
+ },
+ {
+  "q": "Grüße && naïve",
+  "groups": [
+   [
+    "Grüße",
+    "naïve"
+   ]
+  ]
+ }
+]

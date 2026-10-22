@@ -190,7 +190,7 @@ type findResult struct {
 // fast alternative to streaming whole files to the browser. Query parameters:
 // q (RE2 regexp), then path / all=1 / scope as in /stream; stale=1 also
 // searches rotated archives (decoded transparently). The UI's search toggles
-// arrive as literal=1 (match q as literal text, no regexp syntax), nocase=1
+// arrive as literal=1 (q is plain text, see parseTerms), nocase=1
 // (ignore case) and invert=1 (return the lines that do NOT match, grep -v);
 // max and ctx (both bounded) adjust how many matches per file are returned
 // and how many context lines surround each.
@@ -201,22 +201,30 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "empty search", http.StatusBadRequest)
 		return
 	}
+	var match func(string) bool
 	if query.Get("literal") == "1" {
-		q = regexp.QuoteMeta(q)
-	}
-	if query.Get("nocase") == "1" {
-		q = "(?i)" + q
-	}
-	re, err := regexp.Compile(q)
-	if err != nil {
-		http.Error(w, "invalid search: "+err.Error(), http.StatusBadRequest)
-		return
+		terms := parseTerms(q)
+		if len(terms) == 0 {
+			http.Error(w, "empty search", http.StatusBadRequest)
+			return
+		}
+		match = termMatch(terms, query.Get("nocase") == "1")
+	} else {
+		if query.Get("nocase") == "1" {
+			q = "(?i)" + q
+		}
+		re, err := regexp.Compile(q)
+		if err != nil {
+			http.Error(w, "invalid search: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		match = re.MatchString
 	}
 	invert := query.Get("invert") == "1"
 
 	var paths []string
 	if query.Get("all") == "1" {
-		paths = allowedFiles(query.Get("scope")) // "" scope selects everything
+		paths = selectedFiles(query)
 		if query.Get("stale") != "1" {
 			paths = slices.DeleteFunc(paths, isStale)
 		}
@@ -257,9 +265,9 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	for i, p := range paths {
 		wg.Go(func() {
 			if counting {
-				counts[i] = countInFile(r.Context(), p, re, invert, &read[i])
+				counts[i] = countInFile(r.Context(), p, match, invert, &read[i])
 			} else {
-				matches[i] = findInFile(r.Context(), p, re, invert, &read[i], maxMatches, ctxLines)
+				matches[i] = findInFile(r.Context(), p, match, invert, &read[i], maxMatches, ctxLines)
 			}
 		})
 	}
@@ -395,7 +403,7 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 // after-context merges into that excerpt instead of starting its own, and no
 // line is ever returned twice: a hit's before-context starts after the last
 // line already returned, and Gap marks the excerpts a skip precedes.
-func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool, nRead *int64, maxMatches, ctxLines int) []findMatch {
+func findInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64, maxMatches, ctxLines int) []findMatch {
 	var ring []string // the last ctxLines lines, before-context for the next hit
 	var hits []findMatch
 	lineNo, lastShown := 0, 0 // the current line, and the last one returned
@@ -416,7 +424,7 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool
 		}
 		if shown {
 			lastShown = lineNo
-		} else if len(hits) < maxMatches && re.MatchString(line) != invert {
+		} else if len(hits) < maxMatches && match(line) != invert {
 			// The ring holds lines first…lineNo-1. Drop the ones a previous
 			// hit already returned as its after-context: repeating them is
 			// what made excerpts overlap, and the run then reads as one
@@ -442,13 +450,13 @@ func findInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool
 	return hits
 }
 
-// countInFile returns how many lines match re (with invert, how many do NOT)
+// countInFile returns how many lines match (with invert, how many do NOT)
 // — the whole file, uncapped (unlike findInFile there is no early exit; a
 // count must cover everything).
-func countInFile(ctx context.Context, path string, re *regexp.Regexp, invert bool, nRead *int64) int64 {
+func countInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64) int64 {
 	var n int64
 	scanLines(ctx, path, nRead, func(line string) bool {
-		if re.MatchString(line) != invert {
+		if match(line) != invert {
 			n++
 		}
 		return true
@@ -492,6 +500,7 @@ type logLine struct {
 //	        every line.
 //	path    the file to stream, or all=1 for every served file.
 //	scope   with all=1, limit the stream to files under this directory prefix.
+//	        With all=1, scope and path may repeat; their union is streamed.
 //	offset  resume a single-file stream from this byte offset. Served files
 //	        only grow, so the client caches lines it has seen and re-requests
 //	        just the remainder. If the file shrank or was replaced since, an
@@ -524,7 +533,7 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "view is limited to single files", http.StatusBadRequest)
 			return
 		}
-		paths = slices.DeleteFunc(allowedFiles(query.Get("scope")), isStale) // "" scope selects everything
+		paths = slices.DeleteFunc(selectedFiles(query), isStale)
 		if len(paths) == 0 {
 			http.Error(w, "no files to stream", http.StatusNotFound)
 			return

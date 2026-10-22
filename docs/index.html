@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Tailon-ng — a tiny, self-contained log viewer</title>
-    <meta name="description" content="Tailon-ng is a minimal web viewer that tails and greps your log files from the browser. A single static binary, about 2,800 lines of code, almost entirely Go standard library.">
+    <meta name="description" content="Tailon-ng is a minimal web viewer that tails and greps your log files from the browser. A single static binary, about 3,000 lines of code, almost entirely Go standard library.">
     <style>
         :root {
             --bg: #1d1f21; --panel: #282a2e; --fg: #c5c8c6; --muted: #8a8f98;
@@ -112,7 +112,7 @@
         </div>
         <div class="card">
             <h3>Minimal code</h3>
-            <p>About 2,800 lines of code, total. 1,400 in the Go backend, 1,400 in the browser frontend. Small enough to read in one sitting and audit before you run it on a server.</p>
+            <p>About 3,000 lines of code, total. 1,400 in the Go backend, 1,600 in the browser frontend. Small enough to read in one sitting and audit before you run it on a server.</p>
         </div>
         <div class="card">
             <h3>Single binary</h3>
@@ -121,6 +121,14 @@
         <div class="card">
             <h3>Just tail &amp; grep — no shell</h3>
             <p>A single file opens in <b>view</b> — the whole file, following live as it grows. <b>tail</b> follows groups and <b>All files</b> merged; <b>find</b> greps server-side. All with search-as-you-type highlighting, next/prev jumping and editor-style toggles (<b>Aa</b> case, <b>.*</b> regexp, <b>!</b> invert).</p>
+        </div>
+        <div class="card">
+            <h3>Words, not just regexps</h3>
+            <p>With regexp off, a query is plain words: <code>error warn</code> finds either, <code>error &amp;&amp; nginx</code> needs both, <code>"connection refused"</code> keeps a phrase together (<code>\"</code> escapes a quote). The same syntax in the browser search and the server-side find.</p>
+        </div>
+        <div class="card">
+            <h3>A tree of your logs</h3>
+            <p>The file picker is a collapsible tree: folders, per-host name groups, and each live file with its rotations folded into one <code>+14 archived</code> row. Type to filter; <code>Ctrl</code>+click picks several files and groups and tails them as one merged stream.</p>
         </div>
         <div class="card">
             <h3>Group by date</h3>
@@ -187,7 +195,7 @@
 tailon-ng "/var/log/**.log"                 <span class="c"># recursive glob — quoted, so tailon-ng expands it (new files included)</span>
 tailon-ng /var/log/nginx/ /var/log/apache/  <span class="c"># several directories</span>
 tailon-ng -b :9000 access.log               <span class="c"># pick the port</span></pre>
-        <p>Then open <code>http://localhost:8080</code> (or the port you picked), choose a single file (opens in <b>view</b>: the whole file, following live), a <b>subfolder</b> or <b>All files</b> (tailed and merged), or <b>find</b> — and type a regexp to search.</p>
+        <p>Then open <code>http://localhost:8080</code> (or the port you picked), choose a single file (opens in <b>view</b>: the whole file, following live), a <b>subfolder</b> or <b>All files</b> (tailed and merged), or <b>find</b> — and type words or a regexp to search.</p>
     </section>
 
     <section>

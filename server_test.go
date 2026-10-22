@@ -391,6 +391,23 @@ func TestStreamScopedSubfolder(t *testing.T) {
 	}
 }
 
+// TestSelectedFiles checks that scopes match by prefix and paths exactly:
+// picking 192.168.1.2.log must not pull in 192.168.1.22.log.
+func TestSelectedFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "host1"), 0o755)
+	for _, name := range []string{"host1/a.log", "192.168.1.2.log", "192.168.1.22.log", "other.log"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644)
+	}
+	createListing([]string{dir})
+
+	q := url.Values{"scope": {filepath.Join(dir, "host1") + "/"}, "path": {filepath.Join(dir, "192.168.1.2.log")}}
+	want := []string{filepath.Join(dir, "192.168.1.2.log"), filepath.Join(dir, "host1", "a.log")}
+	if got := selectedFiles(q); !reflect.DeepEqual(got, want) {
+		t.Fatalf("selectedFiles = %v, want %v", got, want)
+	}
+}
+
 // writeArchives fills a directory with one live log and gz/xz/zst archives,
 // then points the global config at it.
 func writeArchives(t *testing.T) (dir string) {
@@ -770,7 +787,7 @@ func TestFindInFileNoOverlap(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 
 	var nRead int64
-	hits := findInFile(context.Background(), path, regexp.MustCompile("needle"), false, &nRead, 10, 3)
+	hits := findInFile(context.Background(), path, regexp.MustCompile("needle").MatchString, false, &nRead, 10, 3)
 
 	// Line 7 falls inside line 5's after-context: already shown, so it merges
 	// there instead of opening an excerpt of its own.

@@ -20,6 +20,7 @@
 <div id="toolbar">
     <span class="combo">
         <input id="file-select" type="text" spellcheck="false" autocomplete="off" placeholder="file" title="File — click for the tree, type to filter">
+        <button id="file-caret" tabindex="-1" title="Show files">▾</button>
         <div id="file-list" hidden></div>
     </span>
     <select id="mode-select" title="Mode"></select>
@@ -29,7 +30,7 @@
             <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
-                <button id="opt-regex" title="Regular expression">.*</button>
+                <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
         </span>

@@ -69,8 +69,22 @@ body {
 /* On narrow windows the file selector and filter give way first; the fixed
    controls (mode, find button, the right-edge group) keep their size. */
 #toolbar .combo { position: relative; display: flex; flex: 0 1 auto; width: 24em; min-width: 7em; }
-#file-select { width: 100%; }
+#file-select { width: 100%; padding-right: 20px; }
 #file-select:focus { outline: none; border-color: var(--notice); }
+/* The ▾ inside the input's right padding; flips while open. */
+#toolbar #file-caret {
+    position: absolute;
+    top: 50%;
+    right: 2px;
+    transform: translateY(-50%);
+    height: 20px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: #888;
+}
+#toolbar #file-caret:hover { color: var(--fg); background: transparent; }
+.combo.open #file-caret { transform: translateY(-50%) rotate(180deg); color: var(--notice); }
 /* The dropdown below the input: the full tree when the input is empty, the
    prefix-matched entries while typing (see comboRender in main.js). */
 #file-list {
@@ -89,9 +103,15 @@ body {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
     white-space: pre;
 }
-.combo-item { padding: 2px 10px; cursor: pointer; }
+/* Row: twisty, name, muted note on the right. */
+.combo-item { display: flex; align-items: baseline; padding: 2px 10px; cursor: pointer; }
+.combo-item .twisty { flex: 0 0 1.2em; color: #888; }
+.combo-item .twisty:not(:empty):hover { color: var(--notice); }
+.combo-item .note { margin-left: auto; padding-left: 2em; color: #888; font-size: 0.9em; }
 .combo-item:hover { background: var(--hover); }
 .combo-item.cur { background: var(--hover); box-shadow: inset 2px 0 0 var(--notice); }
+/* Selected entries. */
+.combo-item.picked .name { color: var(--notice); }
 #mode-select,
 #filter-apply,
 #toolbar .right { flex: 0 0 auto; }

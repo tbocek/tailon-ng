@@ -81,8 +81,22 @@ body {
 /* On narrow windows the file selector and filter give way first; the fixed
    controls (mode, find button, the right-edge group) keep their size. */
 #toolbar .combo { position: relative; display: flex; flex: 0 1 auto; width: 24em; min-width: 7em; }
-#file-select { width: 100%; }
+#file-select { width: 100%; padding-right: 20px; }
 #file-select:focus { outline: none; border-color: var(--notice); }
+/* The ▾ inside the input's right padding; flips while open. */
+#toolbar #file-caret {
+    position: absolute;
+    top: 50%;
+    right: 2px;
+    transform: translateY(-50%);
+    height: 20px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: #888;
+}
+#toolbar #file-caret:hover { color: var(--fg); background: transparent; }
+.combo.open #file-caret { transform: translateY(-50%) rotate(180deg); color: var(--notice); }
 /* The dropdown below the input: the full tree when the input is empty, the
    prefix-matched entries while typing (see comboRender in main.js). */
 #file-list {
@@ -101,9 +115,15 @@ body {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
     white-space: pre;
 }
-.combo-item { padding: 2px 10px; cursor: pointer; }
+/* Row: twisty, name, muted note on the right. */
+.combo-item { display: flex; align-items: baseline; padding: 2px 10px; cursor: pointer; }
+.combo-item .twisty { flex: 0 0 1.2em; color: #888; }
+.combo-item .twisty:not(:empty):hover { color: var(--notice); }
+.combo-item .note { margin-left: auto; padding-left: 2em; color: #888; font-size: 0.9em; }
 .combo-item:hover { background: var(--hover); }
 .combo-item.cur { background: var(--hover); box-shadow: inset 2px 0 0 var(--notice); }
+/* Selected entries. */
+.combo-item.picked .name { color: var(--notice); }
 #mode-select,
 #filter-apply,
 #toolbar .right { flex: 0 0 auto; }
@@ -379,6 +399,7 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 <div id="toolbar">
     <span class="combo">
         <input id="file-select" type="text" spellcheck="false" autocomplete="off" placeholder="file" title="File — click for the tree, type to filter">
+        <button id="file-caret" tabindex="-1" title="Show files">▾</button>
         <div id="file-list" hidden></div>
     </span>
     <select id="mode-select" title="Mode"></select>
@@ -388,7 +409,7 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
             <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
-                <button id="opt-regex" title="Regular expression">.*</button>
+                <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
         </span>
@@ -493,15 +514,53 @@ function saveSettings() {
     } catch (e) { }
 }
 
-// buildRegex compiles the query per the search toggles: with regex off the
-// text is escaped and matched literally, with caseSense off the "i" flag is
-// added. Returns null for an empty query or (while typing) an invalid
-// regexp. Invert is not part of the regex — it negates the test wherever
-// lines are matched (see searchLine).
-function buildRegex() {
+// parseTerms parses a plain-text query into OR-ed groups of AND-ed terms:
+// spaces separate terms (OR), a standalone && joins its neighbours (AND),
+// "…" quotes a phrase, \" and \\ escape. A dangling &&, an empty "" and an
+// unclosed quote are tolerated. terms.go has the same parser; both are
+// tested against testdata/terms.json.
+function parseTerms(q) {
+    const groups = [];
+    let and = false;
+    const blank = c => c === " " || c === "\t";
+    for (let i = 0; i < q.length;) {
+        if (blank(q[i])) { i++; continue; }
+        let tok = "", quoted = false, inQuote = false;
+        for (; i < q.length && (inQuote || !blank(q[i])); i++) {
+            if (q[i] === "\\" && (q[i + 1] === '"' || q[i + 1] === "\\")) tok += q[++i];
+            else if (q[i] === '"') { inQuote = !inQuote; quoted = true; }
+            else tok += q[i];
+        }
+        if (!quoted && tok === "&&") and = true;
+        else if (tok) {
+            if (and && groups.length) groups[groups.length - 1].push(tok);
+            else groups.push([tok]);
+            and = false;
+        }
+    }
+    return groups;
+}
+
+// buildMatcher compiles the query per the toggles into { test(line), mark },
+// mark being the regexp whose matches get highlighted. Returns null for an
+// empty query or an invalid regexp. Invert is applied by the caller.
+function buildMatcher() {
     if (!state.filter) return null;
-    const q = settings.regex ? state.filter : state.filter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    try { return new RegExp(q, settings.caseSense ? "g" : "gi"); } catch (e) { return null; }
+    const flags = settings.caseSense ? "g" : "gi";
+    if (settings.regex) {
+        let re;
+        try { re = new RegExp(state.filter, flags); } catch (e) { return null; }
+        return { test: line => { re.lastIndex = 0; return re.test(line); }, mark: re };
+    }
+    const fold = settings.caseSense ? t => t : t => t.toLowerCase();
+    const groups = parseTerms(state.filter).map(g => g.map(fold));
+    if (!groups.length) return null;
+    // Longest first, so a phrase is marked whole rather than a word in it.
+    const terms = [...new Set(groups.flat())].sort((a, b) => b.length - a.length);
+    return {
+        test: line => { const l = fold(line); return groups.some(g => g.every(t => l.includes(t))); },
+        mark: new RegExp(terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), flags),
+    };
 }
 
 // searchParams adds the toggles to a find/count request, where the server
@@ -557,7 +616,7 @@ function cacheEntry() {
 
 const el = {};
 [
-    "file-select", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
+    "file-select", "file-caret", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
     "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
     "menu-toggle", "menu", "cfg-wrap", "cfg-live", "cfg-archives",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
@@ -785,7 +844,7 @@ const logview = {
                 span.classList.add("selected");
                 selAnchor = span;
             }
-            if (search.re) searchLine(span, search.re); // tail: match lines as they stream in
+            if (search.m) searchLine(span, search.m); // tail: match lines as they stream in
             frag.appendChild(span);
             this.lines.push(span);
         }
@@ -842,7 +901,7 @@ function setProgress(d, t) {
 // which changes the placeholder.
 function updateFilterHints() {
     const finding = state.mode === "find";
-    const rx = settings.regex ? " (regexp)" : "";
+    const rx = settings.regex ? " (regexp)" : " (a b = or, a && b = and)";
     el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") + rx;
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
@@ -904,8 +963,7 @@ function connect(locate) {
 
     let entry = null; // aggregate views are not cached: per-file offsets don't compose
     if (state.file.all) {
-        p.set("all", "1");
-        if (state.file.scope) p.set("scope", state.file.scope); // one subfolder only
+        groupParams(p);
     } else {
         p.set("path", state.file.path);
         entry = cacheEntry();
@@ -1003,8 +1061,9 @@ async function findRequest() {
     const seq = ++findSeq;
     // No query yet: show the files this find would scan, each with its empty
     // count. The selection is the answer to "what am I about to search?", so
-    // it is worth showing before there is anything to show for it.
-    if (!state.filter) {
+    // it is worth showing before there is anything to show for it. A plain
+    // query without terms (just "" or &&) counts as empty.
+    if (!state.filter || (!settings.regex && !parseTerms(state.filter).length)) {
         setLoading(false);
         renderFind(filesInScope().map(path => ({ path: path, matches: [] })));
         return;
@@ -1013,8 +1072,7 @@ async function findRequest() {
     setLoading(true);
     const p = new URLSearchParams({ q: state.filter });
     if (state.file.all) {
-        p.set("all", "1");
-        if (state.file.scope) p.set("scope", state.file.scope);
+        groupParams(p);
         p.set("max", String(settings.findMatches));
         findMaxUsed = settings.findMatches;
     } else {
@@ -1051,6 +1109,16 @@ async function findRequest() {
     renderFind(results);
 }
 
+// groupParams adds a group selection to a request: a scope per group, an
+// exact path per file ("All files" needs neither).
+function groupParams(p) {
+    p.set("all", "1");
+    selMembers().forEach(m => {
+        if (!m.all) p.append("path", m.path);
+        else if (m.scope) p.append("scope", m.scope);
+    });
+}
+
 // filesInScope lists the files a find would scan for the current selection —
 // the same set the server derives from path / all / scope, so an empty query
 // can name them without asking. Archives count only while they are listed,
@@ -1058,9 +1126,10 @@ async function findRequest() {
 function filesInScope() {
     if (!state.file) return [];
     if (!state.file.all) return [state.file.path];
-    const scope = state.file.scope || "";
+    const sel = selMembers();
+    const picked = f => sel.some(m => m.all ? f.path.startsWith(m.scope || "") : f.path === m.path);
     return state.files
-        .filter(f => !f.all && !f.local && f.path.indexOf(scope) === 0 && (settings.archives || !f.stale))
+        .filter(f => !f.all && !f.local && picked(f) && (settings.archives || !f.stale))
         .map(f => f.path);
 }
 
@@ -1072,13 +1141,13 @@ function renderFind(results) {
     if (!results.length) { setStatus("no matches"); return; }
     // Inverted results have no matched substring to <mark> — the lines shown
     // are exactly the ones the query does not match.
-    const re = settings.invert ? null : buildRegex();
+    const m = settings.invert ? null : buildMatcher();
     const frag = document.createDocumentFragment();
     const addLine = (text, cls) => {
         const span = document.createElement("span");
         span.className = "log-entry " + cls;
         appendAnsi(span, text);
-        if (re) markText(span, re); // show what matched, wherever it appears
+        if (m) markText(span, m.mark); // show what matched, wherever it appears
         frag.appendChild(span);
         logview.lines.push(span);
     };
@@ -1138,9 +1207,9 @@ function commonPrefix(paths) {
 // which cancels the in-flight pass before the debounce starts the next one.
 // hits are the highlighted lines in order; stale holds lines whose highlights
 // belong to a superseded query and are removed, sliced as well, at the start
-// of the next pass. applied/re are the query the highlights were built from
-// (re non-null only while a valid query is active).
-const search = { hits: [], stale: [], cur: -1, applied: null, re: null, gen: 0, fileTotal: null };
+// of the next pass. applied is the query the highlights were built from, m
+// its matcher (both non-null only while a valid query is active).
+const search = { hits: [], stale: [], cur: -1, applied: null, m: null, gen: 0, fileTotal: null };
 
 // The browser can only search the lines it holds; in view mode the counter
 // additionally shows the whole-file total, counted server-side (debounced —
@@ -1150,7 +1219,7 @@ function scheduleFileCount() {
     clearTimeout(countTimer);
     if (countAbort) { countAbort.abort(); countAbort = null; } // a superseded count must not keep scanning the file
     search.fileTotal = null;
-    if (DEMO || state.mode !== "view" || !state.file || state.file.all || state.file.local || !search.re) return;
+    if (DEMO || state.mode !== "view" || !state.file || state.file.all || state.file.local || !search.m) return;
     const seq = ++countSeq;
     const q = search.applied;
     const path = state.file.path;
@@ -1182,7 +1251,7 @@ function searchReset() {
     search.stale = [];
     search.cur = -1;
     search.applied = null;
-    search.re = null;
+    search.m = null;
     search.fileTotal = null;
     clearTimeout(countTimer);
     if (countAbort) { countAbort.abort(); countAbort = null; }
@@ -1270,11 +1339,10 @@ function markText(entry, re) {
 // are skipped, so calling it twice on a line (live pass racing the
 // scrollback trim) is harmless. Inverted hits get the line highlight but no
 // <mark>s — there is no matched text to mark.
-function searchLine(entry, re) {
+function searchLine(entry, m) {
     if (entry.classList.contains("hit")) return;
-    re.lastIndex = 0;
-    if (re.test(contentText(entry)) === settings.invert) return;
-    if (!settings.invert) markText(entry, re);
+    if (m.test(contentText(entry)) === settings.invert) return;
+    if (!settings.invert) markText(entry, m.mark);
     entry.classList.add("hit");
     search.hits.push(entry);
 }
@@ -1291,12 +1359,12 @@ function searchApply(done) {
     search.hits = [];
     search.cur = -1;
     search.applied = null;
-    search.re = null;
+    search.m = null;
     if (searchableMode()) {
-        const re = buildRegex(); // null: empty, or incomplete regexp while typing
-        if (re) {
+        const m = buildMatcher(); // null: empty, or incomplete regexp while typing
+        if (m) {
             search.applied = state.filter;
-            search.re = re;
+            search.m = m;
         }
     }
     scheduleFileCount(); // view mode: the whole-file total, counted server-side
@@ -1314,8 +1382,8 @@ function searchApply(done) {
         // scanned too. A concurrent scrollback trim may shift indexes — a
         // re-scanned line is caught by searchLine's already-marked check, a
         // skipped one by the next pass.
-        while (search.re && i < logview.lines.length) {
-            searchLine(logview.lines[i++], search.re);
+        while (search.m && i < logview.lines.length) {
+            searchLine(logview.lines[i++], search.m);
             if (performance.now() - t0 > 12) { updateSearchCount(); setTimeout(step, 0); return; }
         }
         updateSearchCount();
@@ -1391,14 +1459,12 @@ function jumpToFile(path, text) {
     connect(text !== undefined ? text.replace(ANSI_RE, "") : null);
 }
 
-// archiveEntry is the selector entry covering a file together with its rotated
-// archives: the "▸ name*" group the tree offers when several files share that
-// prefix, or — for a file with a single archive, too few to group — an ad-hoc
-// scope over the same prefix, appended so the selector can show it too.
+// archiveEntry returns the "name*" group of a file and its archives, adding
+// one when the tree has none (the folder holds nothing else).
 function archiveEntry(path) {
     const found = state.files.find(f => f.all && f.scope === path);
     if (found) return found;
-    const en = { path: path, scope: path, all: true, label: "▸ " + path.slice(path.lastIndexOf("/") + 1) + "*" };
+    const en = { path: path, scope: path, all: true, label: path.slice(path.lastIndexOf("/") + 1) + "*" };
     state.files.push(en);
     return en;
 }
@@ -1479,6 +1545,17 @@ async function addLocalFile(file) {
     toast(file.name + " — " + lines.length + " lines, local only");
 }
 
+// entryKey identifies an entry across list rebuilds. A file and its
+// rotation group share a path, hence the "*" for groups.
+function entryKey(f) {
+    return (f.all ? "*" : "") + (f.scope || f.path);
+}
+
+// multiEntry is a ctrl+click multi-selection; it behaves like a group.
+function multiEntry(members) {
+    return { path: "", all: true, multi: members };
+}
+
 async function refreshFiles() {
     let data;
     if (DEMO) data = []; // no server: dropped files are the only entries
@@ -1487,7 +1564,7 @@ async function refreshFiles() {
         catch (e) { setStatus("could not load file list"); return; }
     }
 
-    const prev = state.file && (state.file.scope || state.file.path);
+    const prev = selMembers().map(entryKey);
     state.files = [];
     // Archived files never get appended, so by default only live files get a
     // row — the gz toggle adds the archives to the tree. Either way they stay
@@ -1527,65 +1604,65 @@ async function refreshFiles() {
     Object.keys(counts).filter(d => counts[d] < shown.length)
         .forEach(d => groups.push({ path: d, scope: d + "/", all: true, dir: true }));
 
-    // Also group files sharing a name prefix (cut at . - _), e.g. two hosts
-    // logging as 192.168.1.5.log and 192.168.1.22.log yield "▸ 192.168.1*",
-    // selectable for tail and find like a folder. Only maximal prefixes
-    // matching ≥2 files are offered, and none that just mirror a directory.
-    const dirTotals = {};
+    // Also group files sharing a name prefix (cut at . - _): hosts like
+    // 192.168.1.5.log and 192.168.1.22.log yield "192.168.1*", a file and its
+    // rotations "access.log*". Groups are counted like the server selects
+    // them, by string prefix. Only the longest prefix per set of ≥2 files is
+    // kept, and none that just mirror a directory.
+    const sorted = shown.slice().sort((a, b) => a.path < b.path ? -1 : 1);
+    const lower = s => {
+        let lo = 0, hi = sorted.length;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m].path < s) lo = m + 1; else hi = m; }
+        return lo;
+    };
+    const under = p => sorted.slice(lower(p), lower(p + "\uffff")); // files starting with p
+    const cands = new Set();
     shown.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
-        dirTotals[dir] = (dirTotals[dir] || 0) + 1;
-    });
-    const nameGroups = {};
-    shown.forEach(e => {
-        const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
-        const base = e.path.slice(dir.length);
-        for (let i = 1; i < base.length; i++) {
-            if (".-_".indexOf(base[i]) >= 0) {
-                const p = dir + base.slice(0, i);
-                nameGroups[p] = (nameGroups[p] || 0) + 1;
-            }
+        for (let i = dir.length + 1; i < e.path.length; i++) {
+            if (".-_".includes(e.path[i])) cands.add(e.path.slice(0, i));
         }
     });
-    Object.keys(nameGroups).filter(p => {
-        const dir = p.slice(0, p.lastIndexOf("/") + 1);
-        if (nameGroups[p] < 2 || nameGroups[p] === dirTotals[dir]) return false;
-        // Keep only the longest prefix naming this same group of files.
-        return !Object.keys(nameGroups).some(q =>
-            q !== p && q.indexOf(p) === 0 && nameGroups[q] === nameGroups[p]);
-    }).forEach(p => groups.push({ path: p, scope: p, all: true }));
+    const count = {};
+    const names = [...cands].filter(p => {
+        count[p] = under(p).length;
+        return count[p] >= 2 && count[p] < under(p.slice(0, p.lastIndexOf("/") + 1)).length;
+    });
+    names.filter(p => !names.some(q => q !== p && q.startsWith(p) && count[q] === count[p]))
+        .forEach(p => groups.push({ path: p, scope: p, all: true }));
 
-    // Render groups and files as one tree: sorted by path, each entry nests
-    // under the closest group whose scope string-prefixes it — the same rule
-    // the server scopes by, so the display and the selection always agree —
-    // and is indented by its depth. Labels are relative to the parent: a
-    // folder shows its own segment, a name group its base-name prefix, a file
-    // its base name. Every ancestor folder below the common prefix is offered,
-    // so a file's base name is never ambiguous.
-    const stack = []; // scopes of the groups enclosing the current entry
+    // Build the tree: sorted by path, each entry nests under the closest
+    // group whose scope prefixes it (the server's rule too). Labels are
+    // relative to the parent.
+    const stack = []; // enclosing groups
     groups.concat(shown).sort((a, b) => {
         const ka = a.scope || a.path, kb = b.scope || b.path;
         if (ka !== kb) return ka < kb ? -1 : 1;
         return (a.all ? 0 : 1) - (b.all ? 0 : 1); // a group precedes a file of the same name
     }).forEach(en => {
         const key = en.scope || en.path;
-        while (stack.length && key.indexOf(stack[stack.length - 1]) !== 0) stack.pop();
-        let label;
+        while (stack.length && !key.startsWith(stack[stack.length - 1].scope)) stack.pop();
+        const base = en.path.slice(en.path.lastIndexOf("/") + 1);
         if (en.dir) {
-            let parent = state.prefix; // the closest enclosing *folder* shown
-            for (let i = stack.length - 1; i >= 0; i--) {
-                if (stack[i].slice(-1) === "/") { parent = stack[i]; break; }
-            }
-            label = "▸ " + key.slice(parent.length);
-        } else if (en.all) {
-            label = "▸ " + en.path.slice(en.path.lastIndexOf("/") + 1) + "*";
+            const folder = stack.filter(g => g.dir).pop();
+            en.label = key.slice(folder ? folder.scope.length : state.prefix.length);
         } else {
-            label = en.path.slice(en.path.lastIndexOf("/") + 1) + (en.stale ? "  (archived)" : "");
+            en.label = en.all ? base + "*" : base;
         }
-        const indent = "   ".repeat(stack.length); // nbsp indent per depth
-        en.label = indent + label;
+        if (en.all) {
+            const files = under(en.scope);
+            const live = files.filter(f => !f.stale);
+            en.note = live.length === 1 && live[0].path === en.scope
+                ? "+" + (files.length - 1) + " archived"
+                : files.length + " files";
+        } else if (en.stale) {
+            en.note = "archived";
+        }
+        en.depth = stack.length;
+        en.parent = stack[stack.length - 1] || null;
+        if (en.parent) en.parent.kids = true;
         state.files.push(en);
-        if (en.all) stack.push(en.scope);
+        if (en.all) stack.push(en);
     });
 
     // With the gz toggle off, archives still exist in state.files — hidden.
@@ -1593,14 +1670,14 @@ async function refreshFiles() {
 
     // Dropped files close the list, visibly local.
     localFiles.forEach(f => {
-        f.label = "⬇ " + f.path + " (local)";
+        f.label = f.path;
+        f.note = "local";
         state.files.push(f);
     });
 
-    // Restore the previous selection by path/scope, else select the first entry.
-    let i = state.files.findIndex(f => (f.scope || f.path) === prev);
-    if (i < 0) i = state.files.length ? 0 : -1;
-    state.file = i >= 0 ? state.files[i] : null;
+    // Restore the previous selection, else select the first entry.
+    const found = prev.map(k => state.files.find(f => entryKey(f) === k)).filter(Boolean);
+    state.file = found.length > 1 ? multiEntry(found) : found[0] || state.files[0] || null;
     comboDisplay();
     syncModeOptions();
 }
@@ -1614,61 +1691,137 @@ function updateDownload() {
     }
 }
 
-// The file selector is a writable dropdown: the input shows the selection,
-// clicking it drops the full tree, and typing filters the entries (debounced)
-// with a prefix match on each path segment — "ngi" finds nginx/ anywhere in
-// the tree. ArrowUp/Down and Enter, or a click, select; Escape closes. With
-// hundreds of served files this beats scrolling a native <select> popup.
-const combo = { open: false, items: [], cur: -1 };
+// The file selector is a writable dropdown: clicking the input (or the ▾)
+// drops a collapsible tree, typing filters it by path-segment prefix ("ngi"
+// finds nginx/). Ctrl+click or Ctrl+Enter toggles an entry in a
+// multi-selection.
+const combo = { open: false, items: [], cur: -1, tree: false };
 
-// comboDisplay writes the current selection's name into the input.
-function comboDisplay() {
-    const f = state.file;
-    el["file-select"].value =
-        !f ? "" :
-        f.local ? f.path + " (local)" :
-        f.all && !f.path ? "All files" :
-        f.all ? stripPrefix(f.path) + (f.dir ? "/" : "*") :
-        stripPrefix(f.path) + (f.stale ? "  (archived)" : "");
+// Expanded tree groups, by scope, persisted. Groups start collapsed.
+const TREE_KEY = "tailon-tree";
+let treeOpen = new Set();
+try { treeOpen = new Set(JSON.parse(localStorage.getItem(TREE_KEY)) || []); } catch (e) { }
+function treeToggle(f, open) {
+    if (open) treeOpen.add(f.scope); else treeOpen.delete(f.scope);
+    try { localStorage.setItem(TREE_KEY, JSON.stringify([...treeOpen])); } catch (e) { }
 }
 
-// comboFilterLabel is the flat label an entry shows while filtering (the tree
-// labels with their indentation only make sense unfiltered).
-function comboFilterLabel(f) {
-    if (f.local) return "⬇ " + f.path + " (local)";
+function treeShown(f) {
+    for (let p = f.parent; p; p = p.parent) if (!treeOpen.has(p.scope)) return false;
+    return true;
+}
+
+// entryName is an entry's full name (tree labels are relative to the parent).
+function entryName(f) {
+    if (f.local) return f.path;
     if (f.all && !f.path) return "All files";
-    if (f.all) return "▸ " + stripPrefix(f.path) + (f.dir ? "/" : "*");
-    return stripPrefix(f.path) + (f.stale ? "  (archived)" : "");
+    return stripPrefix(f.path) + (f.dir ? "/" : f.all ? "*" : "");
 }
 
-// comboRender (re)builds the popup: the full tree for an empty query, the
-// matching entries flat otherwise.
-function comboRender(query) {
+function comboDisplay() {
+    el["file-select"].value = selMembers().map(f =>
+        entryName(f) + (f.stale ? "  (archived)" : f.local ? " (local)" : "")).join(", ");
+}
+
+// comboRow builds a row: twisty (tree only), name, muted note.
+function comboRow(f, i, tree) {
+    const item = document.createElement("div");
+    item.className = "combo-item";
+    item.dataset.i = String(i);
+    const add = (cls, text) => {
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = text;
+        item.appendChild(span);
+    };
+    if (tree) {
+        item.style.paddingLeft = "calc(6px + " + (f.depth || 0) * 1.2 + "em)";
+        add("twisty", f.kids ? (treeOpen.has(f.scope) ? "▾" : "▸") : "");
+    }
+    add("name", tree ? f.label : entryName(f));
+    if (f.note) add("note", f.note);
+    return item;
+}
+
+// comboRender (re)builds the popup: the tree for an empty query, else the
+// matches flat. The highlight goes to state.files[keep] when given, else to
+// the selection, or the top match when filtering.
+function comboRender(query, keep) {
     const q = query.trim().toLowerCase();
     const list = el["file-list"];
     list.replaceChildren();
     combo.items = [];
     combo.cur = -1;
+    combo.tree = !q;
+    const target = keep !== undefined ? state.files[keep] : selMembers()[0];
     state.files.forEach((f, i) => {
-        if (f.stale && !settings.archives) return; // gz off: archives stay hidden
+        if (f.stale && !settings.archives) return;
         if (q) {
-            // Prefix-match any segment of the (prefix-stripped) path;
-            // decorations like ▸ or "(archived)" are not matched.
             const key = f.all && !f.path ? "all files" : stripPrefix(f.scope || f.path);
             if (!("/" + key.toLowerCase()).includes("/" + q)) return;
-        }
-        const item = document.createElement("div");
-        item.className = "combo-item";
-        item.textContent = q ? comboFilterLabel(f) : f.label;
-        item.dataset.i = String(i);
-        list.appendChild(item);
-        if (f === state.file) combo.cur = combo.items.length;
+        } else if (!treeShown(f)) return;
+        list.appendChild(comboRow(f, i, !q));
+        if (f === target) combo.cur = combo.items.length;
         combo.items.push(i);
     });
-    if (q) combo.cur = combo.items.length ? 0 : -1; // the top match is the target
+    if (q) combo.cur = combo.items.length ? 0 : -1;
     combo.open = combo.items.length > 0;
     list.hidden = !combo.open;
+    list.parentNode.classList.toggle("open", combo.open);
+    comboMarks();
     comboCur();
+}
+
+// selMembers lists the selected entries: a multi-selection's picks, or one.
+function selMembers() {
+    return !state.file ? [] : state.file.multi || [state.file];
+}
+
+function comboMarks() {
+    const sel = selMembers();
+    for (const row of el["file-list"].children) {
+        row.classList.toggle("picked", sel.includes(state.files[Number(row.dataset.i)]));
+    }
+}
+
+// comboPick toggles state.files[i] in the selection and applies it, keeping
+// the list open. "All files" and local files don't combine: it returns false
+// for those, and the caller selects them plainly.
+function comboPick(i) {
+    const f = state.files[i], cur = state.file;
+    const solo = e => e.local || (e.all && !e.path && !e.multi);
+    if (solo(f) || !cur || cur.local) return false;
+    const picks = solo(cur) ? [] : selMembers().slice();
+    const j = picks.indexOf(f);
+    if (j >= 0) picks.splice(j, 1); else picks.push(f);
+    state.file = picks.length > 1 ? multiEntry(picks) : picks[0] || state.files[0];
+    if (combo.tree) { comboDisplay(); el["file-select"].select(); } // keep a typed filter
+    comboMarks();
+    updateDownload();
+    syncModeOptions();
+    connect();
+    return true;
+}
+
+// comboReveal expands the groups above the selection.
+function comboReveal() {
+    selMembers().forEach(m => {
+        for (let p = m.parent; p; p = p.parent) if (!treeOpen.has(p.scope)) treeToggle(p, true);
+    });
+}
+
+// comboTree handles ArrowRight/Left on the highlighted row: open/close a
+// group, or step to its first child/parent. False when not in the tree.
+function comboTree(right) {
+    if (!combo.open || !combo.tree || combo.cur < 0) return false;
+    const i = combo.items[combo.cur], f = state.files[i];
+    if (f.kids && treeOpen.has(f.scope) !== right) { treeToggle(f, right); comboRender("", i); }
+    else if (right && f.kids) comboMove(1);
+    else if (!right && f.parent) {
+        combo.cur = combo.items.indexOf(state.files.indexOf(f.parent));
+        comboCur();
+    }
+    return true;
 }
 
 // comboCur marks the highlighted row and keeps it scrolled into view.
@@ -1689,6 +1842,7 @@ function comboMove(dir) {
 // comboClose hides the popup and restores the selection's name in the input.
 function comboClose() {
     el["file-list"].hidden = true;
+    el["file-list"].parentNode.classList.remove("open");
     combo.open = false;
     comboDisplay();
 }
@@ -1815,9 +1969,8 @@ function init() {
         );
     });
 
-    // The writable file dropdown: focus refreshes the listing and drops the
-    // full tree (the text pre-selected, so typing starts a filter right away);
-    // input filters debounced; ArrowUp/Down + Enter or a click select.
+    // The file dropdown: focus or the ▾ opens it with the text pre-selected,
+    // so typing starts a filter.
     const fileInput = el["file-select"];
     const selectEntry = i => {
         state.file = state.files[i];
@@ -1827,9 +1980,21 @@ function init() {
         syncModeOptions(); // single files open in view; groups tail
         connect();
     };
+    const choose = (i, multi) => {
+        if (!(multi && comboPick(i))) selectEntry(i);
+        else { combo.cur = combo.items.indexOf(i); comboCur(); }
+    };
     let comboTimer = 0;
-    fileInput.addEventListener("focus", () => {
-        refreshFiles().then(() => { fileInput.select(); comboRender(""); });
+    const comboOpen = () => refreshFiles().then(() => {
+        comboReveal();
+        fileInput.select();
+        comboRender("");
+    });
+    fileInput.addEventListener("focus", comboOpen);
+    el["file-caret"].addEventListener("click", () => {
+        if (combo.open) { comboClose(); fileInput.blur(); }
+        else if (document.activeElement === fileInput) comboOpen();
+        else fileInput.focus();
     });
     fileInput.addEventListener("input", () => {
         clearTimeout(comboTimer);
@@ -1840,8 +2005,10 @@ function init() {
             e.preventDefault();
             if (combo.open) comboMove(e.key === "ArrowDown" ? 1 : -1);
             else comboRender("");
+        } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && comboTree(e.key === "ArrowRight")) {
+            e.preventDefault();
         } else if (e.key === "Enter" && combo.open && combo.cur >= 0) {
-            selectEntry(combo.items[combo.cur]);
+            choose(combo.items[combo.cur], e.ctrlKey || e.metaKey);
         } else if (e.key === "Escape") {
             e.stopPropagation(); // just close the list; keep line selections
             comboClose();
@@ -1849,10 +2016,18 @@ function init() {
         }
     });
     fileInput.addEventListener("blur", comboClose);
-    el["file-list"].addEventListener("mousedown", e => e.preventDefault()); // keep the input focused
+    // Clicks in the list or on the ▾ must not blur the input (closing the list).
+    ["file-list", "file-caret"].forEach(id => el[id].addEventListener("mousedown", e => e.preventDefault()));
     el["file-list"].addEventListener("click", e => {
         const item = e.target.closest(".combo-item");
-        if (item) selectEntry(Number(item.dataset.i));
+        if (!item) return;
+        const i = Number(item.dataset.i), f = state.files[i];
+        if (f.kids && e.target.classList.contains("twisty")) {
+            treeToggle(f, !treeOpen.has(f.scope));
+            comboRender("", i);
+        } else {
+            choose(i, e.ctrlKey || e.metaKey);
+        }
     });
 
     // The search toggles inside the input: flipping one re-runs the search
