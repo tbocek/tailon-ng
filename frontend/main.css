@@ -68,9 +68,7 @@ body {
 
 /* On narrow windows the file selector and filter give way first; the fixed
    controls (mode, find button, the right-edge group) keep their size. */
-#toolbar .combo { position: relative; display: flex; flex: 0 1 auto; width: 24em; min-width: 7em; }
-#file-select { width: 100%; padding-right: 44px; }
-#file-select:focus { outline: none; border-color: var(--notice); }
+#toolbar .combo { flex: 0 1 auto; width: 24em; min-width: 7em; }
 #toolbar #file-caret { font-size: 14px; }
 .combo.open #file-caret { transform: rotate(180deg); color: var(--notice); }
 /* The dropdown below the input: the full tree when the input is empty, the
@@ -133,17 +131,24 @@ body {
 #toolbar .filter select { flex: 0 0 auto; } /* the find-shape selects keep their size */
 #filter-input::placeholder { color: #888; font-style: italic; }
 
-/* The search toggles (match case, regexp, invert) sit inside the input's
-   right edge, editor-style: the wrapper anchors them and the input's right
-   padding reserves their width so text never runs underneath. A toggled-on
-   button carries the accent. */
-#toolbar .input-wrap { position: relative; display: flex; flex: 1 1 auto; min-width: 3em; }
-#filter-input { width: 100%; padding-right: 64px; text-align: left; }
-/* The browser's default (blue) focus ring clashes with the theme and draws
-   underneath the inset toggles; mark focus on the input's own border in the
-   accent color instead. */
-#filter-input:focus { outline: none; border-color: var(--notice); }
-.input-toggles { position: absolute; top: 50%; right: 3px; transform: translateY(-50%); display: flex; gap: 2px; }
+/* Fields with inline toggles: the wrapper draws the box (accent border on
+   focus, no browser-blue ring), the toggles sit beside the text. */
+#toolbar .input-wrap { flex: 1 1 auto; min-width: 3em; }
+#toolbar .combo,
+#toolbar .input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 24px;
+    background: var(--input);
+    border: 1px solid #555a62;
+    border-radius: 2px;
+}
+#toolbar .combo:focus-within,
+#toolbar .input-wrap:focus-within { border-color: var(--notice); }
+#toolbar .combo input,
+#toolbar .input-wrap input { flex: 1; min-width: 0; height: 22px; border: 0; background: transparent; outline: none; }
+.input-toggles { display: flex; gap: 2px; margin-right: 3px; }
 #toolbar .input-toggles button {
     height: 18px;
     padding: 0 3px;
@@ -158,7 +163,7 @@ body {
     border-color: var(--notice);
     background: rgba(255, 151, 79, 0.12);
 }
-#search-count { align-self: center; padding: 0 4px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
+#search-count { padding: 0 4px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
 /* With matches beyond the shown lines the counter becomes the "continue
    search on the server" button. */
 #search-count.more { color: var(--notice); cursor: pointer; }

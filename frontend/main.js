@@ -357,12 +357,14 @@ const logview = {
         if (this.pending.length > MAX_LINES + TRIM_CHUNK) {
             this.pending.splice(0, this.pending.length - MAX_LINES);
         }
-        if (this.paused) setStatus("paused · " + this.pending.length + " new — space resumes");
-        else if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
+        if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
     },
     flush: function () {
-        if (this.paused) return;
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
+        if (this.paused) {
+            if (this.pending.length) setStatus("paused · " + this.pending.length + " new — space resumes");
+            return;
+        }
         const scroll = !this.loading && this.atBottom();
         const frag = document.createDocumentFragment();
         let located = null;
@@ -840,8 +842,6 @@ function updateSearchCount() {
     el["search-count"].classList.toggle("more", more);
     el["search-count"].title = more ? "Continue on the server: list the matches across the whole file" : "";
     el["search-count"].textContent = text;
-    // The count sits inside the input, left of the toggles: keep text clear of it.
-    el["filter-input"].style.paddingRight = el["search-count"].parentNode.offsetWidth + 6 + "px";
 }
 
 // continueSearch escalates a view search to the server: find on the same file
@@ -1180,7 +1180,8 @@ async function refreshFiles() {
         while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m].path < s) lo = m + 1; else hi = m; }
         return lo;
     };
-    const under = p => sorted.slice(lower(p), lower(p + "\uffff")); // files starting with p
+    const end = p => lower(p + "\uffff");
+    const count = p => end(p) - lower(p); // files starting with p
     const cands = new Set();
     shown.forEach(e => {
         const dir = e.path.slice(0, e.path.lastIndexOf("/") + 1);
@@ -1188,12 +1189,12 @@ async function refreshFiles() {
             if (".-_".includes(e.path[i])) cands.add(e.path.slice(0, i));
         }
     });
-    const count = {};
+    const n = {};
     const names = [...cands].filter(p => {
-        count[p] = under(p).length;
-        return count[p] >= 2 && count[p] < under(p.slice(0, p.lastIndexOf("/") + 1)).length;
+        n[p] = count(p);
+        return n[p] >= 2 && n[p] < count(p.slice(0, p.lastIndexOf("/") + 1));
     });
-    names.filter(p => !names.some(q => q !== p && q.startsWith(p) && count[q] === count[p]))
+    names.filter(p => !names.some(q => q !== p && q.startsWith(p) && n[q] === n[p]))
         .forEach(p => groups.push({ path: p, scope: p, all: true }));
 
     // Build the tree: sorted by path, each entry nests under the closest
@@ -1215,7 +1216,7 @@ async function refreshFiles() {
             en.label = en.all ? base + "*" : base;
         }
         if (en.all) {
-            const files = under(en.scope);
+            const files = sorted.slice(lower(en.scope), end(en.scope));
             const live = files.filter(f => !f.stale);
             en.note = live.length === 1 && live[0].path === en.scope
                 ? "+" + (files.length - 1) + " archived"
