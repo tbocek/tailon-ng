@@ -1096,7 +1096,7 @@ func TestIndexHandler(t *testing.T) {
 	if !strings.Contains(body, `id="toolbar"`) || !strings.Contains(body, "main.js") {
 		t.Fatal("index template did not render the expected content")
 	}
-	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">version dev<") {
+	if !strings.Contains(body, `id="version"`) || !strings.Contains(body, ">dev<") {
 		t.Fatal("index template did not render the version badge")
 	}
 }

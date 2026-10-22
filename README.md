@@ -126,11 +126,13 @@ across the whole file, each jumping back into the view at its line.
 
 Three editor-style toggles inside the input shape search and find alike:
 **Aa** match case, **.\*** regular expression (off: plain text, see below),
-**!** invert (keep the lines that do *not* match, like `grep -v`). The
-**☰ menu** holds the remaining settings — **wrap lines**, **live view** (off
-makes a view read once) and **archives** (on by default: list rotated
-archives and search them too) — plus the running version. All toggles and
-settings persist in the browser (localStorage).
+**!** invert (keep the lines that do *not* match, like `grep -v`). On the
+right, a button toggles **line wrapping**, next to the running version. All
+toggles persist in the browser (localStorage).
+
+**Space pauses** tail and view: new lines queue (the badge counts them) and
+appear when you press Space again. It works anywhere except while typing —
+in the search box only when it is empty.
 
 **Plain-text queries** (**.\*** off) have a small syntax of their own, the
 same in search and find:
@@ -172,13 +174,12 @@ close one, click its name to select it; the tree remembers what you opened
 and drops open at the current selection. **Ctrl+click** (⌘+click on a Mac,
 or Ctrl+Enter) picks several entries at once — files and groups mixed — and
 tails them as one merged stream, or finds across them. Typing into the
-selector filters
-the entries, prefix-matching each path segment (`ngi` finds `nginx/` anywhere
-in the tree); ArrowUp/Down and Enter select. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
+selector filters the entries, prefix-matching each path segment (`ngi` finds
+`nginx/` anywhere in the tree); ArrowUp/Down and Enter select. Rotation leftovers (`.gz`, `.bz2`, `.xz`,
 `.zst`, numeric `.1`, date-stamped `-YYYYMMDD`, `.old`, `.bak`) never get
 appended, so they are never tailed, but the selector lists them and find
-searches them, decoded transparently — turn the ☰ menu's **archives** off to
-leave them out. In a multi-file stream, a file that has rotations carries a
+searches them, decoded transparently — the **gz** toggle in the selector
+leaves them out. In a multi-file stream, a file that has rotations carries a
 small **gz** button next to its name: one click selects that file together
 with all of its archives and switches to find. Binary files (a NUL byte in
 the first kilobyte — `wtmp`, journald files, stray executables) are not
@@ -245,8 +246,8 @@ appear. Several paths can be given as separate arguments.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) never get
 appended, so they are never tailed — but the file selector lists them and find
-searches them too, decompressed transparently. The web UI's "archives" switch
-(in the hamburger menu, on by default) leaves them out of both.
+searches them too, decompressed transparently. The web UI's "gz" toggle in the
+file selector (on by default) leaves them out of both.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.

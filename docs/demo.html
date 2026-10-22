@@ -81,22 +81,10 @@ body {
 /* On narrow windows the file selector and filter give way first; the fixed
    controls (mode, find button, the right-edge group) keep their size. */
 #toolbar .combo { position: relative; display: flex; flex: 0 1 auto; width: 24em; min-width: 7em; }
-#file-select { width: 100%; padding-right: 20px; }
+#file-select { width: 100%; padding-right: 44px; }
 #file-select:focus { outline: none; border-color: var(--notice); }
-/* The ▾ inside the input's right padding; flips while open. */
-#toolbar #file-caret {
-    position: absolute;
-    top: 50%;
-    right: 2px;
-    transform: translateY(-50%);
-    height: 20px;
-    padding: 0 4px;
-    border: 0;
-    background: transparent;
-    color: #888;
-}
-#toolbar #file-caret:hover { color: var(--fg); background: transparent; }
-.combo.open #file-caret { transform: translateY(-50%) rotate(180deg); color: var(--notice); }
+#toolbar #file-caret { font-size: 14px; }
+.combo.open #file-caret { transform: rotate(180deg); color: var(--notice); }
 /* The dropdown below the input: the full tree when the input is empty, the
    prefix-matched entries while typing (see comboRender in main.js). */
 #file-list {
@@ -190,9 +178,13 @@ body {
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }
 
-/* Download and the ☰ settings button, pinned to the toolbar's right edge. */
+/* Download, wrap and version, pinned to the toolbar's right edge. */
 #toolbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-#menu-toggle { width: 26px; padding: 0; }
+#opt-wrap { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
+#opt-wrap svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#toolbar #opt-wrap.on { color: var(--notice); border-color: var(--notice); }
+#version { color: #8a8f98; font-size: 12px; text-decoration: none; }
+#version:hover { color: var(--notice); }
 
 #action-download {
     display: inline-flex;
@@ -203,25 +195,6 @@ body {
     background: var(--input);
 }
 #action-download svg { width: 14px; height: 14px; fill: var(--fg); }
-
-/* The ☰ menu drops down below the toolbar's right edge: the persisted
-   settings as checkbox rows, the version link (to the releases page) last. */
-#menu {
-    position: absolute;
-    top: 100%;
-    right: 4px;
-    z-index: 30;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 12px;
-    background: var(--bar);
-    border: 1px solid #555a62;
-    border-radius: 4px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-#version { color: #8a8f98; font-size: 12px; border-top: 1px solid #3a3e44; padding-top: 8px; }
-#version:hover { color: var(--notice); }
 
 #status {
     position: fixed;
@@ -399,7 +372,10 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
 <div id="toolbar">
     <span class="combo">
         <input id="file-select" type="text" spellcheck="false" autocomplete="off" placeholder="file" title="File — click for the tree, type to filter">
-        <button id="file-caret" tabindex="-1" title="Show files">▾</button>
+        <span class="input-toggles">
+            <button id="opt-archives" tabindex="-1" title="Include rotated archives (.gz, .1, …) in the list and in find">gz</button>
+            <button id="file-caret" tabindex="-1" title="Show files">▾</button>
+        </span>
         <div id="file-list" hidden></div>
     </span>
     <select id="mode-select" title="Mode"></select>
@@ -424,14 +400,11 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
         <a id="action-download" title="Download file" hidden>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M216 0h80c13.3 0 24 10.7 24 24v168h87.7c17.8 0 26.7 21.5 14.1 34.1L269.7 378.3c-7.5 7.5-19.8 7.5-27.3 0L90.1 226.1c-12.6-12.6-3.7-34.1 14.1-34.1H192V24c0-13.3 10.7-24 24-24zm296 376v112c0 13.3-10.7 24-24 24H24c-13.3 0-24-10.7-24-24V376c0-13.3 10.7-24 24-24h146.7l49 49c20.1 20.1 52.5 20.1 72.6 0l49-49H488c13.3 0 24 10.7 24 24zm-124 88c0-11-9-20-20-20s-20 9-20 20 9 20 20 20 20-9 20-20zm64 0c0-11-9-20-20-20s-20 9-20 20 9 20 20 20 20-9 20-20z"/></svg>
         </a>
-        <button id="menu-toggle" title="Options">☰</button>
+        <button id="opt-wrap" title="Wrap lines">
+            <svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h9.5a2.5 2.5 0 0 1 0 5H8m1.5-2-2 2 2 2M2 13h3"/></svg>
+        </button>
+        <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">demo</a>
     </span>
-    <div id="menu" hidden>
-        <label><input id="cfg-wrap" type="checkbox"> wrap lines</label>
-        <label><input id="cfg-live" type="checkbox"> live view</label>
-        <label title="List rotated archives (.gz, .1, …) in the file selector and search them in find"><input id="cfg-archives" type="checkbox"> archives</label>
-        <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">version demo</a>
-    </div>
     <div id="loading" hidden></div>
 </div>
 
@@ -488,18 +461,17 @@ const state = {
 // NOT match — and apply to the browser-side search and the server-side find
 // alike.
 // findMatches/findCtx shape a find's results (see FIND_MATCHES).
-// The ☰ menu holds the rest: wrap (line wrapping), live (a view keeps
-// following the file after its backlog; off reads it once) and archives (list
-// rotated archives in the file selector and widen a find to them).
+// wrap is the toolbar's wrap button; archives the file list's gz toggle
+// (list rotated archives and widen a find to them).
 const SETTINGS_KEY = "tailon-settings";
 // Bumped when a default changes in a way a stored value must not undo. Only
 // the settings named below are reset; everything else the user chose survives.
 const SETTINGS_VERSION = 2;
-const RESET_ON_UPGRADE = ["archives"]; // v2: archives moved to ☰ and defaults on
+const RESET_ON_UPGRADE = ["archives"]; // v2: archives default on
 const settings = {
     regex: true, caseSense: true, invert: false,
     findMatches: 3, findCtx: 3,
-    wrap: false, archives: true, live: true,
+    wrap: false, archives: true,
 };
 try { // no localStorage (or corrupt content): the defaults stand
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
@@ -618,7 +590,7 @@ const el = {};
 [
     "file-select", "file-caret", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
     "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
-    "menu-toggle", "menu", "cfg-wrap", "cfg-live", "cfg-archives",
+    "opt-archives", "opt-wrap",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(id => el[id] = document.getElementById(id));
 
@@ -782,6 +754,7 @@ const logview = {
     // unless the user started scrolling (reading) during the load.
     loading: false,
     userScrolled: false,
+    paused: false, // space bar: new lines queue until resumed
     clear: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
         this.pending = [];
@@ -800,9 +773,11 @@ const logview = {
         if (this.pending.length > MAX_LINES + TRIM_CHUNK) {
             this.pending.splice(0, this.pending.length - MAX_LINES);
         }
-        if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
+        if (this.paused) setStatus("paused · " + this.pending.length + " new — space resumes");
+        else if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
     },
     flush: function () {
+        if (this.paused) return;
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
         const scroll = !this.loading && this.atBottom();
         const frag = document.createDocumentFragment();
@@ -925,6 +900,7 @@ function connect(locate) {
     findSeq++; // any in-flight search result is for a view that no longer exists —
     if (findAbort) { findAbort.abort(); findAbort = null; } // dropping its connection also stops the server-side scan
     logview.clear();
+    logview.paused = false;
     logview.locate = locate !== undefined ? locate : null;
     setLoading(false);
     setStatus("");
@@ -977,12 +953,9 @@ function connect(locate) {
             p.set("offset", String(entry.offset));
             if (entry.id) p.set("id", entry.id); // prove the offset belongs to this very file
         }
-        // A live single file in view mode loads its backlog and then keeps
-        // following — new lines simply append, and the server reads only the
-        // appended bytes from there on (files are append-only). Archives stay
-        // a read-once (they never grow, and EOF marks their cache complete),
-        // and so does a view with the ☰ menu's "live view" turned off.
-        if (state.mode === "view" && !state.file.stale && settings.live) p.set("mode", "tail");
+        // A view of a live file keeps following after its backlog; archives
+        // never grow, so they are read once.
+        if (state.mode === "view" && !state.file.stale) p.set("mode", "tail");
     }
 
     setStatus("connecting…");
@@ -1243,6 +1216,17 @@ function scheduleFileCount() {
     }, 600);
 }
 
+function togglePause() {
+    logview.paused = !logview.paused;
+    setStatus(logview.paused ? "paused — space resumes" : "");
+    logview.flush();
+}
+
+function applyWrap() {
+    el["logview"].classList.toggle("wrap", settings.wrap);
+    el["opt-wrap"].classList.toggle("on", settings.wrap);
+}
+
 function searchableMode() { return state.mode === "tail" || state.mode === "view"; }
 
 function searchReset() {
@@ -1471,14 +1455,9 @@ function archiveEntry(path) {
 
 // findArchives searches a file and its rotations at once — the gz shortcut
 // beside a line's filename. The archives have to be listed for the group to
-// exist at all, so it turns that setting on when the ☰ menu has it off.
+// exist at all, so it turns that setting on.
 async function findArchives(path) {
-    if (!settings.archives) {
-        settings.archives = true;
-        el["cfg-archives"].checked = true;
-        saveSettings();
-        await refreshFiles();
-    }
+    if (!settings.archives) await setArchives(true);
     state.file = archiveEntry(path);
     comboDisplay();
     state.mode = "find";
@@ -1810,6 +1789,16 @@ function comboReveal() {
     });
 }
 
+// setArchives shows or hides rotated archives in the list (and in find).
+async function setArchives(on) {
+    settings.archives = on;
+    saveSettings();
+    el["opt-archives"].classList.toggle("on", on);
+    await refreshFiles();
+    updateDownload();
+    if (combo.open) comboRender(combo.tree ? "" : el["file-select"].value);
+}
+
 // comboTree handles ArrowRight/Left on the highlighted row: open/close a
 // group, or step to its first child/parent. False when not in the tree.
 function comboTree(right) {
@@ -1950,8 +1939,17 @@ function init() {
     // user drag-selected text just now (the more recent, explicit intent) or is
     // in an input. Escape clears the selection.
     document.addEventListener("keydown", e => {
+        if (e.key === " " && searchableMode() && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // Space pauses, unless typing (the search box counts only when empty).
+            const t = e.target;
+            if (!/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || (t === el["filter-input"] && !t.value)) {
+                e.preventDefault();
+                if (t.tagName === "BUTTON") t.blur(); // no click on keyup
+                togglePause();
+                return;
+            }
+        }
         if (e.key === "Escape") {
-            if (!el["menu"].hidden) { el["menu"].hidden = true; return; }
             clearSelection();
             selAnchor = null;
             return;
@@ -2017,7 +2015,7 @@ function init() {
     });
     fileInput.addEventListener("blur", comboClose);
     // Clicks in the list or on the ▾ must not blur the input (closing the list).
-    ["file-list", "file-caret"].forEach(id => el[id].addEventListener("mousedown", e => e.preventDefault()));
+    ["file-list", "file-caret", "opt-archives"].forEach(id => el[id].addEventListener("mousedown", e => e.preventDefault()));
     el["file-list"].addEventListener("click", e => {
         const item = e.target.closest(".combo-item");
         if (!item) return;
@@ -2062,35 +2060,14 @@ function init() {
         if (state.mode === "find" && state.filter) connect();
     };
 
-    // ☰ settings menu: the button toggles it; a click anywhere else or
-    // Escape closes it (this click listener sees the opening click too — the
-    // closest() checks keep it from closing the menu it just opened).
-    el["menu-toggle"].onclick = () => { el["menu"].hidden = !el["menu"].hidden; };
-    document.addEventListener("click", e => {
-        if (!el["menu"].hidden && !e.target.closest("#menu") && !e.target.closest("#menu-toggle")) {
-            el["menu"].hidden = true;
-        }
-    });
-
-    // The ☰ checkboxes, each persisting its setting and applying it: wrap
-    // toggles the logview class, "live view" reconnects — to follow, or to
-    // stop following — and "archives" rebuilds the file tree around the
-    // rotated files it adds or drops. That reconnects unconditionally: a
-    // find's file set changes with the setting, and a name group can appear or
-    // vanish with the archives that formed it, taking the selection with it.
-    [
-        ["cfg-wrap", "wrap", () => el["logview"].classList.toggle("wrap", settings.wrap)],
-        ["cfg-live", "live", () => { if (state.mode === "view") connect(); }],
-        ["cfg-archives", "archives", () => refreshFiles().then(() => { updateDownload(); connect(); })],
-    ].forEach(([id, key, apply]) => {
-        el[id].checked = settings[key];
-        el[id].onchange = () => {
-            settings[key] = el[id].checked;
-            saveSettings();
-            apply();
-        };
-    });
-    el["logview"].classList.toggle("wrap", settings.wrap);
+    el["opt-wrap"].onclick = () => {
+        settings.wrap = !settings.wrap;
+        saveSettings();
+        applyWrap();
+    };
+    applyWrap();
+    el["opt-archives"].classList.toggle("on", settings.archives);
+    el["opt-archives"].onclick = () => setArchives(!settings.archives).then(connect);
 
     refreshFiles().then(() => { updateDownload(); connect(); });
 }

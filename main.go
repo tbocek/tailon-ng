@@ -27,8 +27,8 @@ appear. Several paths can be given as separate arguments.
 
 Rotation leftovers (.gz, .bz2, .xz, .zst, .1, -YYYYMMDD, .old, .bak) never get
 appended, so they are never tailed — but the file selector lists them and find
-searches them too, decompressed transparently. The web UI's "archives" switch
-(in the hamburger menu, on by default) leaves them out of both.
+searches them too, decompressed transparently. The web UI's "gz" toggle in the
+file selector (on by default) leaves them out of both.
 
 On Linux, appended lines are pushed instantly via inotify; elsewhere, and on
 filesystems without notification support, tailon-ng falls back to polling.

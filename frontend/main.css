@@ -69,22 +69,10 @@ body {
 /* On narrow windows the file selector and filter give way first; the fixed
    controls (mode, find button, the right-edge group) keep their size. */
 #toolbar .combo { position: relative; display: flex; flex: 0 1 auto; width: 24em; min-width: 7em; }
-#file-select { width: 100%; padding-right: 20px; }
+#file-select { width: 100%; padding-right: 44px; }
 #file-select:focus { outline: none; border-color: var(--notice); }
-/* The ▾ inside the input's right padding; flips while open. */
-#toolbar #file-caret {
-    position: absolute;
-    top: 50%;
-    right: 2px;
-    transform: translateY(-50%);
-    height: 20px;
-    padding: 0 4px;
-    border: 0;
-    background: transparent;
-    color: #888;
-}
-#toolbar #file-caret:hover { color: var(--fg); background: transparent; }
-.combo.open #file-caret { transform: translateY(-50%) rotate(180deg); color: var(--notice); }
+#toolbar #file-caret { font-size: 14px; }
+.combo.open #file-caret { transform: rotate(180deg); color: var(--notice); }
 /* The dropdown below the input: the full tree when the input is empty, the
    prefix-matched entries while typing (see comboRender in main.js). */
 #file-list {
@@ -178,9 +166,13 @@ body {
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }
 
-/* Download and the ☰ settings button, pinned to the toolbar's right edge. */
+/* Download, wrap and version, pinned to the toolbar's right edge. */
 #toolbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-#menu-toggle { width: 26px; padding: 0; }
+#opt-wrap { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
+#opt-wrap svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#toolbar #opt-wrap.on { color: var(--notice); border-color: var(--notice); }
+#version { color: #8a8f98; font-size: 12px; text-decoration: none; }
+#version:hover { color: var(--notice); }
 
 #action-download {
     display: inline-flex;
@@ -191,25 +183,6 @@ body {
     background: var(--input);
 }
 #action-download svg { width: 14px; height: 14px; fill: var(--fg); }
-
-/* The ☰ menu drops down below the toolbar's right edge: the persisted
-   settings as checkbox rows, the version link (to the releases page) last. */
-#menu {
-    position: absolute;
-    top: 100%;
-    right: 4px;
-    z-index: 30;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 12px;
-    background: var(--bar);
-    border: 1px solid #555a62;
-    border-radius: 4px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-#version { color: #8a8f98; font-size: 12px; border-top: 1px solid #3a3e44; padding-top: 8px; }
-#version:hover { color: var(--notice); }
 
 #status {
     position: fixed;

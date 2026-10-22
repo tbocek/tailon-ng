@@ -45,18 +45,17 @@ const state = {
 // NOT match — and apply to the browser-side search and the server-side find
 // alike.
 // findMatches/findCtx shape a find's results (see FIND_MATCHES).
-// The ☰ menu holds the rest: wrap (line wrapping), live (a view keeps
-// following the file after its backlog; off reads it once) and archives (list
-// rotated archives in the file selector and widen a find to them).
+// wrap is the toolbar's wrap button; archives the file list's gz toggle
+// (list rotated archives and widen a find to them).
 const SETTINGS_KEY = "tailon-settings";
 // Bumped when a default changes in a way a stored value must not undo. Only
 // the settings named below are reset; everything else the user chose survives.
 const SETTINGS_VERSION = 2;
-const RESET_ON_UPGRADE = ["archives"]; // v2: archives moved to ☰ and defaults on
+const RESET_ON_UPGRADE = ["archives"]; // v2: archives default on
 const settings = {
     regex: true, caseSense: true, invert: false,
     findMatches: 3, findCtx: 3,
-    wrap: false, archives: true, live: true,
+    wrap: false, archives: true,
 };
 try { // no localStorage (or corrupt content): the defaults stand
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
@@ -175,7 +174,7 @@ const el = {};
 [
     "file-select", "file-caret", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
     "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
-    "menu-toggle", "menu", "cfg-wrap", "cfg-live", "cfg-archives",
+    "opt-archives", "opt-wrap",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(id => el[id] = document.getElementById(id));
 
@@ -339,6 +338,7 @@ const logview = {
     // unless the user started scrolling (reading) during the load.
     loading: false,
     userScrolled: false,
+    paused: false, // space bar: new lines queue until resumed
     clear: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
         this.pending = [];
@@ -357,9 +357,11 @@ const logview = {
         if (this.pending.length > MAX_LINES + TRIM_CHUNK) {
             this.pending.splice(0, this.pending.length - MAX_LINES);
         }
-        if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
+        if (this.paused) setStatus("paused · " + this.pending.length + " new — space resumes");
+        else if (!this.raf) this.raf = requestAnimationFrame(this.flush.bind(this));
     },
     flush: function () {
+        if (this.paused) return;
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
         const scroll = !this.loading && this.atBottom();
         const frag = document.createDocumentFragment();
@@ -482,6 +484,7 @@ function connect(locate) {
     findSeq++; // any in-flight search result is for a view that no longer exists —
     if (findAbort) { findAbort.abort(); findAbort = null; } // dropping its connection also stops the server-side scan
     logview.clear();
+    logview.paused = false;
     logview.locate = locate !== undefined ? locate : null;
     setLoading(false);
     setStatus("");
@@ -534,12 +537,9 @@ function connect(locate) {
             p.set("offset", String(entry.offset));
             if (entry.id) p.set("id", entry.id); // prove the offset belongs to this very file
         }
-        // A live single file in view mode loads its backlog and then keeps
-        // following — new lines simply append, and the server reads only the
-        // appended bytes from there on (files are append-only). Archives stay
-        // a read-once (they never grow, and EOF marks their cache complete),
-        // and so does a view with the ☰ menu's "live view" turned off.
-        if (state.mode === "view" && !state.file.stale && settings.live) p.set("mode", "tail");
+        // A view of a live file keeps following after its backlog; archives
+        // never grow, so they are read once.
+        if (state.mode === "view" && !state.file.stale) p.set("mode", "tail");
     }
 
     setStatus("connecting…");
@@ -800,6 +800,17 @@ function scheduleFileCount() {
     }, 600);
 }
 
+function togglePause() {
+    logview.paused = !logview.paused;
+    setStatus(logview.paused ? "paused — space resumes" : "");
+    logview.flush();
+}
+
+function applyWrap() {
+    el["logview"].classList.toggle("wrap", settings.wrap);
+    el["opt-wrap"].classList.toggle("on", settings.wrap);
+}
+
 function searchableMode() { return state.mode === "tail" || state.mode === "view"; }
 
 function searchReset() {
@@ -1028,14 +1039,9 @@ function archiveEntry(path) {
 
 // findArchives searches a file and its rotations at once — the gz shortcut
 // beside a line's filename. The archives have to be listed for the group to
-// exist at all, so it turns that setting on when the ☰ menu has it off.
+// exist at all, so it turns that setting on.
 async function findArchives(path) {
-    if (!settings.archives) {
-        settings.archives = true;
-        el["cfg-archives"].checked = true;
-        saveSettings();
-        await refreshFiles();
-    }
+    if (!settings.archives) await setArchives(true);
     state.file = archiveEntry(path);
     comboDisplay();
     state.mode = "find";
@@ -1367,6 +1373,16 @@ function comboReveal() {
     });
 }
 
+// setArchives shows or hides rotated archives in the list (and in find).
+async function setArchives(on) {
+    settings.archives = on;
+    saveSettings();
+    el["opt-archives"].classList.toggle("on", on);
+    await refreshFiles();
+    updateDownload();
+    if (combo.open) comboRender(combo.tree ? "" : el["file-select"].value);
+}
+
 // comboTree handles ArrowRight/Left on the highlighted row: open/close a
 // group, or step to its first child/parent. False when not in the tree.
 function comboTree(right) {
@@ -1507,8 +1523,17 @@ function init() {
     // user drag-selected text just now (the more recent, explicit intent) or is
     // in an input. Escape clears the selection.
     document.addEventListener("keydown", e => {
+        if (e.key === " " && searchableMode() && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // Space pauses, unless typing (the search box counts only when empty).
+            const t = e.target;
+            if (!/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || (t === el["filter-input"] && !t.value)) {
+                e.preventDefault();
+                if (t.tagName === "BUTTON") t.blur(); // no click on keyup
+                togglePause();
+                return;
+            }
+        }
         if (e.key === "Escape") {
-            if (!el["menu"].hidden) { el["menu"].hidden = true; return; }
             clearSelection();
             selAnchor = null;
             return;
@@ -1574,7 +1599,7 @@ function init() {
     });
     fileInput.addEventListener("blur", comboClose);
     // Clicks in the list or on the ▾ must not blur the input (closing the list).
-    ["file-list", "file-caret"].forEach(id => el[id].addEventListener("mousedown", e => e.preventDefault()));
+    ["file-list", "file-caret", "opt-archives"].forEach(id => el[id].addEventListener("mousedown", e => e.preventDefault()));
     el["file-list"].addEventListener("click", e => {
         const item = e.target.closest(".combo-item");
         if (!item) return;
@@ -1619,35 +1644,14 @@ function init() {
         if (state.mode === "find" && state.filter) connect();
     };
 
-    // ☰ settings menu: the button toggles it; a click anywhere else or
-    // Escape closes it (this click listener sees the opening click too — the
-    // closest() checks keep it from closing the menu it just opened).
-    el["menu-toggle"].onclick = () => { el["menu"].hidden = !el["menu"].hidden; };
-    document.addEventListener("click", e => {
-        if (!el["menu"].hidden && !e.target.closest("#menu") && !e.target.closest("#menu-toggle")) {
-            el["menu"].hidden = true;
-        }
-    });
-
-    // The ☰ checkboxes, each persisting its setting and applying it: wrap
-    // toggles the logview class, "live view" reconnects — to follow, or to
-    // stop following — and "archives" rebuilds the file tree around the
-    // rotated files it adds or drops. That reconnects unconditionally: a
-    // find's file set changes with the setting, and a name group can appear or
-    // vanish with the archives that formed it, taking the selection with it.
-    [
-        ["cfg-wrap", "wrap", () => el["logview"].classList.toggle("wrap", settings.wrap)],
-        ["cfg-live", "live", () => { if (state.mode === "view") connect(); }],
-        ["cfg-archives", "archives", () => refreshFiles().then(() => { updateDownload(); connect(); })],
-    ].forEach(([id, key, apply]) => {
-        el[id].checked = settings[key];
-        el[id].onchange = () => {
-            settings[key] = el[id].checked;
-            saveSettings();
-            apply();
-        };
-    });
-    el["logview"].classList.toggle("wrap", settings.wrap);
+    el["opt-wrap"].onclick = () => {
+        settings.wrap = !settings.wrap;
+        saveSettings();
+        applyWrap();
+    };
+    applyWrap();
+    el["opt-archives"].classList.toggle("on", settings.archives);
+    el["opt-archives"].onclick = () => setArchives(!settings.archives).then(connect);
 
     refreshFiles().then(() => { updateDownload(); connect(); });
 }
