@@ -126,9 +126,9 @@ across the whole file, each jumping back into the view at its line.
 
 Three editor-style toggles inside the input shape search and find alike:
 **Aa** match case, **.\*** regular expression (off: plain text, see below),
-**!** invert (keep the lines that do *not* match, like `grep -v`). On the
-right, a button toggles **line wrapping**, next to the running version. All
-toggles persist in the browser (localStorage).
+**!** invert (keep the lines that do *not* match, like `grep -v`). A button
+left of the search field toggles **line wrapping**; the running version sits
+at the right end. All toggles persist in the browser (localStorage).
 
 **Space pauses** tail and view: new lines queue (the badge counts them) and
 appear when you press Space again. It works anywhere except while typing —

@@ -840,6 +840,8 @@ function updateSearchCount() {
     el["search-count"].classList.toggle("more", more);
     el["search-count"].title = more ? "Continue on the server: list the matches across the whole file" : "";
     el["search-count"].textContent = text;
+    // The count sits inside the input, left of the toggles: keep text clear of it.
+    el["filter-input"].style.paddingRight = el["search-count"].parentNode.offsetWidth + 6 + "px";
 }
 
 // continueSearch escalates a view search to the server: find on the same file
