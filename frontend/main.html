@@ -44,13 +44,13 @@
         <select id="find-ctx" title="Context lines around each match" hidden></select>
         <button id="filter-apply">find</button>
         <span class="input-wrap">
-            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span class="input-toggles">
-                <span id="search-count" hidden></span>
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
+            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
+            <span id="search-count" hidden></span>
         </span>
     </span>
     <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">{{.Version}}</a>

@@ -148,7 +148,7 @@ body {
 #toolbar .input-wrap:focus-within { border-color: var(--notice); }
 #toolbar .combo input,
 #toolbar .input-wrap input { flex: 1; min-width: 0; height: 22px; border: 0; background: transparent; outline: none; }
-.input-toggles { display: flex; gap: 2px; margin-right: 3px; }
+.input-toggles { display: flex; gap: 2px; margin: 0 3px; }
 #toolbar .input-toggles button {
     height: 18px;
     padding: 0 3px;
@@ -163,7 +163,7 @@ body {
     border-color: var(--notice);
     background: rgba(255, 151, 79, 0.12);
 }
-#search-count { padding: 0 4px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
+#search-count { padding: 0 6px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
 /* With matches beyond the shown lines the counter becomes the "continue
    search on the server" button. */
 #search-count.more { color: var(--notice); cursor: pointer; }

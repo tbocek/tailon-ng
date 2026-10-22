@@ -160,7 +160,7 @@ body {
 #toolbar .input-wrap:focus-within { border-color: var(--notice); }
 #toolbar .combo input,
 #toolbar .input-wrap input { flex: 1; min-width: 0; height: 22px; border: 0; background: transparent; outline: none; }
-.input-toggles { display: flex; gap: 2px; margin-right: 3px; }
+.input-toggles { display: flex; gap: 2px; margin: 0 3px; }
 #toolbar .input-toggles button {
     height: 18px;
     padding: 0 3px;
@@ -175,7 +175,7 @@ body {
     border-color: var(--notice);
     background: rgba(255, 151, 79, 0.12);
 }
-#search-count { padding: 0 4px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
+#search-count { padding: 0 6px; color: #8a8f98; font-size: 11px; white-space: nowrap; }
 /* With matches beyond the shown lines the counter becomes the "continue
    search on the server" button. */
 #search-count.more { color: var(--notice); cursor: pointer; }
@@ -402,13 +402,13 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
         <select id="find-ctx" title="Context lines around each match" hidden></select>
         <button id="filter-apply">find</button>
         <span class="input-wrap">
-            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span class="input-toggles">
-                <span id="search-count" hidden></span>
                 <button id="opt-case" title="Match case">Aa</button>
                 <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
+            <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
+            <span id="search-count" hidden></span>
         </span>
     </span>
     <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">demo</a>
