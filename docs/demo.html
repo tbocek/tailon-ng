@@ -139,13 +139,13 @@ body {
 
 /* The filter input and its apply button form one tight group. It takes the
    spare width on large windows and shrinks before anything else on small ones. */
-#toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; min-width: 7em; }
+#toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; }
 #toolbar .filter select { flex: 0 0 auto; } /* the find-shape selects keep their size */
 #filter-input::placeholder { color: #888; font-style: italic; }
 
 /* Fields with inline toggles: the wrapper draws the box (accent border on
    focus, no browser-blue ring), the toggles sit beside the text. */
-#toolbar .input-wrap { flex: 1 1 auto; min-width: 3em; }
+#toolbar .input-wrap { flex: 1 1 auto; min-width: 10em; }
 #toolbar .combo,
 #toolbar .input-wrap {
     position: relative;
@@ -243,12 +243,15 @@ body {
 }
 #action-download svg { width: 14px; height: 14px; fill: var(--fg); }
 
+/* Status badge between the search field and the version: capped, cut
+   messages show in full as the tooltip. */
 #status {
-    position: fixed;
-    bottom: 8px;
-    right: 10px;
-    z-index: 10;
-    padding: 3px 8px;
+    flex: 0 0 auto;
+    max-width: 12em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 8px;
     background: var(--notice);
     color: var(--bg);
     font-weight: bold;
@@ -466,11 +469,11 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
             </span>
         </span>
     </span>
+    <span id="status" hidden></span>
     <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">demo</a>
     <div id="loading" hidden></div>
 </div>
 
-<div id="status" hidden></div>
 <div id="toast" role="status"></div>
 
 <div id="scrollable"><div id="logview"></div></div>
@@ -840,7 +843,7 @@ const logview = {
     flush: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
         if (this.paused) {
-            if (this.pending.length) setStatus("paused · " + this.pending.length + " new — space resumes");
+            if (this.pending.length) setStatus("paused · " + this.pending.length + " new");
             return;
         }
         const scroll = !this.loading && this.atBottom();
@@ -907,7 +910,12 @@ logview.anchor = document.createElement("div");
 logview.anchor.id = "log-anchor";
 el["logview"].appendChild(logview.anchor);
 
-function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
+// setStatus shows a short badge text; detail, when given, is its tooltip.
+function setStatus(text, detail) {
+    el["status"].textContent = text;
+    el["status"].title = detail || text;
+    el["status"].hidden = !text;
+}
 
 // setLoading toggles the progress bar under the toolbar and (unless holdView
 // is false — tail keeps bottom-following) the scroll-suppressed loading mode,
@@ -1139,7 +1147,7 @@ async function findRequest() {
         });
         if (results === null) throw new Error("incomplete response");
     } catch (err) {
-        if (seq === findSeq) { setLoading(false); setStatus("search failed: " + err.message); }
+        if (seq === findSeq) { setLoading(false); setStatus(err.message.startsWith("invalid search") ? "invalid search" : "find failed", err.message); }
         return;
     }
     if (seq !== findSeq) return; // another view took over while we waited
@@ -1283,7 +1291,7 @@ function scheduleFileCount() {
 
 function togglePause() {
     logview.paused = !logview.paused;
-    setStatus(logview.paused ? "paused — space resumes" : "");
+    setStatus(logview.paused ? "paused" : "");
     logview.flush();
 }
 
@@ -1605,7 +1613,7 @@ async function refreshFiles() {
     if (DEMO) data = []; // no server: dropped files are the only entries
     else {
         try { data = await (await fetch(RELATIVE_ROOT + "list")).json(); }
-        catch (e) { setStatus("could not load file list"); return; }
+        catch (e) { setStatus("no file list"); return; }
     }
 
     const prev = selMembers().map(entryKey);

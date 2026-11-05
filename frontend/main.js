@@ -362,7 +362,7 @@ const logview = {
     flush: function () {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; } // also called directly at eof
         if (this.paused) {
-            if (this.pending.length) setStatus("paused · " + this.pending.length + " new — space resumes");
+            if (this.pending.length) setStatus("paused · " + this.pending.length + " new");
             return;
         }
         const scroll = !this.loading && this.atBottom();
@@ -429,7 +429,12 @@ logview.anchor = document.createElement("div");
 logview.anchor.id = "log-anchor";
 el["logview"].appendChild(logview.anchor);
 
-function setStatus(text) { el["status"].textContent = text; el["status"].hidden = !text; }
+// setStatus shows a short badge text; detail, when given, is its tooltip.
+function setStatus(text, detail) {
+    el["status"].textContent = text;
+    el["status"].title = detail || text;
+    el["status"].hidden = !text;
+}
 
 // setLoading toggles the progress bar under the toolbar and (unless holdView
 // is false — tail keeps bottom-following) the scroll-suppressed loading mode,
@@ -661,7 +666,7 @@ async function findRequest() {
         });
         if (results === null) throw new Error("incomplete response");
     } catch (err) {
-        if (seq === findSeq) { setLoading(false); setStatus("search failed: " + err.message); }
+        if (seq === findSeq) { setLoading(false); setStatus(err.message.startsWith("invalid search") ? "invalid search" : "find failed", err.message); }
         return;
     }
     if (seq !== findSeq) return; // another view took over while we waited
@@ -805,7 +810,7 @@ function scheduleFileCount() {
 
 function togglePause() {
     logview.paused = !logview.paused;
-    setStatus(logview.paused ? "paused — space resumes" : "");
+    setStatus(logview.paused ? "paused" : "");
     logview.flush();
 }
 
@@ -1127,7 +1132,7 @@ async function refreshFiles() {
     if (DEMO) data = []; // no server: dropped files are the only entries
     else {
         try { data = await (await fetch(RELATIVE_ROOT + "list")).json(); }
-        catch (e) { setStatus("could not load file list"); return; }
+        catch (e) { setStatus("no file list"); return; }
     }
 
     const prev = selMembers().map(entryKey);

@@ -127,13 +127,13 @@ body {
 
 /* The filter input and its apply button form one tight group. It takes the
    spare width on large windows and shrinks before anything else on small ones. */
-#toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; min-width: 7em; }
+#toolbar .filter { display: flex; align-items: center; gap: 4px; flex: 1 1 8em; }
 #toolbar .filter select { flex: 0 0 auto; } /* the find-shape selects keep their size */
 #filter-input::placeholder { color: #888; font-style: italic; }
 
 /* Fields with inline toggles: the wrapper draws the box (accent border on
    focus, no browser-blue ring), the toggles sit beside the text. */
-#toolbar .input-wrap { flex: 1 1 auto; min-width: 3em; }
+#toolbar .input-wrap { flex: 1 1 auto; min-width: 10em; }
 #toolbar .combo,
 #toolbar .input-wrap {
     position: relative;
@@ -231,12 +231,15 @@ body {
 }
 #action-download svg { width: 14px; height: 14px; fill: var(--fg); }
 
+/* Status badge between the search field and the version: capped, cut
+   messages show in full as the tooltip. */
 #status {
-    position: fixed;
-    bottom: 8px;
-    right: 10px;
-    z-index: 10;
-    padding: 3px 8px;
+    flex: 0 0 auto;
+    max-width: 12em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 8px;
     background: var(--notice);
     color: var(--bg);
     font-weight: bold;
