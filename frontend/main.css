@@ -149,6 +149,47 @@ body {
 #toolbar .combo input,
 #toolbar .input-wrap input { flex: 1; min-width: 0; height: 22px; border: 0; background: transparent; outline: none; }
 .input-toggles { display: flex; gap: 2px; margin: 0 3px; }
+/* A short bar marks where the search text starts. */
+.input-wrap .input-toggles::after { content: ""; width: 1px; height: 14px; margin: 0 1px 0 3px; align-self: center; background: #555a62; }
+
+/* The (i) at the field's end: hover or focus shows the rules for the
+   current mode (.input-wrap.rx while regexp is on). */
+.help {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-right: 5px;
+    border: 1px solid #8a8f98;
+    border-radius: 50%;
+    color: #8a8f98;
+    font: 10px/12px var(--mono);
+    text-align: center;
+    cursor: help;
+    outline: none;
+}
+.help:hover, .help:focus { color: var(--notice); border-color: var(--notice); }
+.help-pop {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    width: 24em;
+    padding: 8px 10px;
+    text-align: left;
+    font: 12px/1.6 "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bar);
+    border: 1px solid #555a62;
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    white-space: normal;
+}
+.help:hover .help-pop, .help:focus .help-pop { display: block; }
+.help-pop > span { display: block; }
+.help-pop > span + span { margin-top: 6px; }
+.help-pop code { font-family: var(--mono); color: var(--notice); }
+.input-wrap.rx .plain, .input-wrap:not(.rx) .rx { display: none; }
 #toolbar .input-toggles button {
     height: 18px;
     padding: 0 3px;

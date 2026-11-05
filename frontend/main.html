@@ -36,7 +36,6 @@
             <svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h9.5a2.5 2.5 0 0 1 0 5H8m1.5-2-2 2 2 2M2 13h3"/></svg>
         </button>
     </span>
-    <span class="sep"></span>
     <span class="filter">
         <button id="search-prev" title="Previous match (Shift+Enter)" hidden>▲</button>
         <button id="search-next" title="Next match (Enter)" hidden>▼</button>
@@ -46,11 +45,26 @@
         <span class="input-wrap">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
-                <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
+                <button id="opt-regex" title="Regular expression">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
             <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span id="search-count" hidden></span>
+            <span class="help" tabindex="0">i
+                <span class="help-pop">
+                    <span class="plain"><b>Plain text</b> (.* off)<br>
+                        <code>error warn</code> either word<br>
+                        <code>error &amp;&amp; nginx</code> both<br>
+                        <code>a b &amp;&amp; c</code> a, or b and c<br>
+                        <code>"conn refused"</code> a phrase, <code>\"</code> a quote</span>
+                    <span class="rx"><b>Regular expression</b> (.* on)<br>
+                        <code>error|warn</code> either word<br>
+                        <code>^Oct 22</code> at the line start<br>
+                        <code>status=5\d\d</code> any 5xx<br>
+                        Find uses Go RE2: no lookarounds or backreferences.</span>
+                    <span><b>Aa</b> match case · <b>!</b> invert · <b>Enter</b> next match · <b>Space</b> in the empty field pauses</span>
+                </span>
+            </span>
         </span>
     </span>
     <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">{{.Version}}</a>

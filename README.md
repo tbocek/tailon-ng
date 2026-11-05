@@ -135,7 +135,8 @@ appear when you press Space again. It works anywhere except while typing —
 in the search box only when it is empty.
 
 **Plain-text queries** (**.\*** off) have a small syntax of their own, the
-same in search and find:
+same in search and find (hover the **i** at the end of the search field for a
+summary of the current mode's rules):
 
 - spaces separate terms, and a line matches if it contains **any** of them
   (or);

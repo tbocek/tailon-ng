@@ -161,6 +161,47 @@ body {
 #toolbar .combo input,
 #toolbar .input-wrap input { flex: 1; min-width: 0; height: 22px; border: 0; background: transparent; outline: none; }
 .input-toggles { display: flex; gap: 2px; margin: 0 3px; }
+/* A short bar marks where the search text starts. */
+.input-wrap .input-toggles::after { content: ""; width: 1px; height: 14px; margin: 0 1px 0 3px; align-self: center; background: #555a62; }
+
+/* The (i) at the field's end: hover or focus shows the rules for the
+   current mode (.input-wrap.rx while regexp is on). */
+.help {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-right: 5px;
+    border: 1px solid #8a8f98;
+    border-radius: 50%;
+    color: #8a8f98;
+    font: 10px/12px var(--mono);
+    text-align: center;
+    cursor: help;
+    outline: none;
+}
+.help:hover, .help:focus { color: var(--notice); border-color: var(--notice); }
+.help-pop {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    width: 24em;
+    padding: 8px 10px;
+    text-align: left;
+    font: 12px/1.6 "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bar);
+    border: 1px solid #555a62;
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    white-space: normal;
+}
+.help:hover .help-pop, .help:focus .help-pop { display: block; }
+.help-pop > span { display: block; }
+.help-pop > span + span { margin-top: 6px; }
+.help-pop code { font-family: var(--mono); color: var(--notice); }
+.input-wrap.rx .plain, .input-wrap:not(.rx) .rx { display: none; }
 #toolbar .input-toggles button {
     height: 18px;
     padding: 0 3px;
@@ -394,7 +435,6 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
             <svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h9.5a2.5 2.5 0 0 1 0 5H8m1.5-2-2 2 2 2M2 13h3"/></svg>
         </button>
     </span>
-    <span class="sep"></span>
     <span class="filter">
         <button id="search-prev" title="Previous match (Shift+Enter)" hidden>▲</button>
         <button id="search-next" title="Next match (Enter)" hidden>▼</button>
@@ -404,11 +444,26 @@ body.dragging #scrollable { outline: 2px dashed var(--notice); outline-offset: -
         <span class="input-wrap">
             <span class="input-toggles">
                 <button id="opt-case" title="Match case">Aa</button>
-                <button id="opt-regex" title="Regular expression — off: plain text, space = or, && = and, &quot;phrase&quot;">.*</button>
+                <button id="opt-regex" title="Regular expression">.*</button>
                 <button id="opt-invert" title="Invert: lines that do not match">!</button>
             </span>
             <input id="filter-input" type="text" spellcheck="false" autocomplete="off" placeholder="search and highlight shown lines">
             <span id="search-count" hidden></span>
+            <span class="help" tabindex="0">i
+                <span class="help-pop">
+                    <span class="plain"><b>Plain text</b> (.* off)<br>
+                        <code>error warn</code> either word<br>
+                        <code>error &amp;&amp; nginx</code> both<br>
+                        <code>a b &amp;&amp; c</code> a, or b and c<br>
+                        <code>"conn refused"</code> a phrase, <code>\"</code> a quote</span>
+                    <span class="rx"><b>Regular expression</b> (.* on)<br>
+                        <code>error|warn</code> either word<br>
+                        <code>^Oct 22</code> at the line start<br>
+                        <code>status=5\d\d</code> any 5xx<br>
+                        Find uses Go RE2: no lookarounds or backreferences.</span>
+                    <span><b>Aa</b> match case · <b>!</b> invert · <b>Enter</b> next match · <b>Space</b> in the empty field pauses</span>
+                </span>
+            </span>
         </span>
     </span>
     <a id="version" href="https://github.com/tbocek/tailon-ng/releases" target="_blank" rel="noopener" title="Releases">demo</a>
@@ -885,8 +940,9 @@ function setProgress(d, t) {
 // which changes the placeholder.
 function updateFilterHints() {
     const finding = state.mode === "find";
-    const rx = settings.regex ? " (regexp)" : " (a b = or, a && b = and)";
-    el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") + rx;
+    el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") +
+        (settings.regex ? " (regexp)" : "");
+    el["filter-input"].parentNode.classList.toggle("rx", settings.regex); // picks the help section
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
         : "Browser-side: searches the lines loaded in this view" +

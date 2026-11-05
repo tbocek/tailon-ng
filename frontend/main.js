@@ -462,8 +462,9 @@ function setProgress(d, t) {
 // which changes the placeholder.
 function updateFilterHints() {
     const finding = state.mode === "find";
-    const rx = settings.regex ? " (regexp)" : " (a b = or, a && b = and)";
-    el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") + rx;
+    el["filter-input"].placeholder = (finding ? "find in files" : "search and highlight shown lines") +
+        (settings.regex ? " (regexp)" : "");
+    el["filter-input"].parentNode.classList.toggle("rx", settings.regex); // picks the help section
     el["filter-input"].title = finding
         ? "Server-side: scans the whole selected files on disk and returns the first matches with context"
         : "Browser-side: searches the lines loaded in this view" +
