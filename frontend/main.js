@@ -174,7 +174,7 @@ const el = {};
 [
     "file-select", "file-caret", "file-list", "mode-select", "filter-input", "filter-apply", "search-prev", "search-next", "search-count",
     "opt-regex", "opt-case", "opt-invert", "find-matches", "find-ctx",
-    "opt-archives", "opt-wrap",
+    "opt-archives", "opt-wrap", "opt-pause",
     "action-download", "status", "scrollable", "logview", "toast", "loading",
 ].forEach(id => el[id] = document.getElementById(id));
 
@@ -475,6 +475,7 @@ function updateFilterHints() {
         : "Browser-side: searches the lines loaded in this view" +
         (state.mode === "view" ? " — the counter shows the whole-file total; click it to continue the search on the server" : "");
     el["filter-apply"].hidden = !finding;
+    el["opt-pause"].hidden = finding; // find results don't stream
     el["search-prev"].hidden = el["search-next"].hidden = finding;
     // The find-shape selects appear only in find mode (matches-per-file only
     // for group searches — a single-file find always lists all matches).
@@ -492,7 +493,7 @@ function connect(locate) {
     findSeq++; // any in-flight search result is for a view that no longer exists —
     if (findAbort) { findAbort.abort(); findAbort = null; } // dropping its connection also stops the server-side scan
     logview.clear();
-    logview.paused = false;
+    setPaused(false);
     logview.locate = locate !== undefined ? locate : null;
     setLoading(false);
     setStatus("");
@@ -720,7 +721,9 @@ function renderFind(results) {
         const n = f.matches.length;
         const head = document.createElement("div");
         head.className = "find-file";
-        head.textContent = stripPrefix(f.path) + " — " + (n >= findMaxUsed ? findMaxUsed + "+" : n) + (n === 1 ? " match" : " matches");
+        head.textContent = stripPrefix(f.path) + " — " + (n >= findMaxUsed ? findMaxUsed + "+" : n) + (n === 1 ? " match" : " matches") +
+            (f.error ? " · could not read: " + f.error : "");
+        head.classList.toggle("err", !!f.error);
         head.dataset.path = f.path;
         if (n) head.dataset.text = f.matches[0].text; // absent with no query: open at the top
         head.title = "open " + f.path;
@@ -774,7 +777,7 @@ function commonPrefix(paths) {
 // belong to a superseded query and are removed, sliced as well, at the start
 // of the next pass. applied is the query the highlights were built from, m
 // its matcher (both non-null only while a valid query is active).
-const search = { hits: [], stale: [], cur: -1, applied: null, m: null, gen: 0, fileTotal: null };
+const search = { hits: [], stale: [], cur: -1, applied: null, m: null, gen: 0, fileTotal: null, error: null, fileError: null };
 
 // The browser can only search the lines it holds; in view mode the counter
 // additionally shows the whole-file total, counted server-side (debounced —
@@ -783,34 +786,42 @@ let countTimer = 0, countSeq = 0, countAbort = null;
 function scheduleFileCount() {
     clearTimeout(countTimer);
     if (countAbort) { countAbort.abort(); countAbort = null; } // a superseded count must not keep scanning the file
-    search.fileTotal = null;
+    search.fileTotal = search.fileError = null;
     if (DEMO || state.mode !== "view" || !state.file || state.file.all || state.file.local || !search.m) return;
     const seq = ++countSeq;
     const q = search.applied;
     const path = state.file.path;
     countTimer = setTimeout(async () => {
         const ac = countAbort = new AbortController();
-        let total = null;
+        let total = null, error = null;
         try {
             const p = searchParams(new URLSearchParams({ q: q, count: "1", path: path }));
             const resp = await fetch(RELATIVE_ROOT + "find?" + p.toString(), { signal: ac.signal });
-            if (!resp.ok) return;
+            if (!resp.ok) throw new Error(await resp.text());
             // NDJSON: skip the progress lines, take the counts line.
             await readLines(resp.body, line => {
                 if (!line) return;
                 const obj = JSON.parse(line);
                 if (obj.counts) total = obj.counts.length ? obj.counts[0].n : 0;
+                if (obj.counts && obj.counts.length && obj.counts[0].error) error = obj.counts[0].error;
             });
-        } catch (e) { return; }
-        if (seq !== countSeq || total === null) return;
-        search.fileTotal = total;
+        } catch (e) {
+            if (e.name === "AbortError") return; // superseded
+            error = e.message;
+        }
+        if (seq !== countSeq) return;
+        search.fileTotal = error ? null : total;
+        search.fileError = error;
         updateSearchCount();
     }, 600);
 }
 
-function togglePause() {
-    logview.paused = !logview.paused;
-    setStatus(logview.paused ? "paused" : "");
+// setPaused holds new lines back (Space or the pause button) or releases them.
+function setPaused(on) {
+    logview.paused = on;
+    el["opt-pause"].classList.toggle("on", on);
+    el["opt-pause"].title = on ? "Resume (Space)" : "Pause (Space)";
+    setStatus(on ? "paused" : "");
     logview.flush();
 }
 
@@ -829,6 +840,7 @@ function searchReset() {
     search.applied = null;
     search.m = null;
     search.fileTotal = null;
+    search.error = search.fileError = null;
     clearTimeout(countTimer);
     if (countAbort) { countAbort.abort(); countAbort = null; }
     countSeq++;
@@ -836,8 +848,16 @@ function searchReset() {
 }
 
 function updateSearchCount() {
+    const c = el["search-count"];
+    c.hidden = !searchableMode() || (search.applied === null && !search.error);
+    c.classList.toggle("err", !!search.error);
+    if (search.error) {
+        c.classList.remove("more");
+        c.textContent = "invalid regexp";
+        c.title = search.error;
+        return;
+    }
     const n = search.hits.length;
-    el["search-count"].hidden = !searchableMode() || search.applied === null;
     let text = search.cur >= 0 ? (search.cur + 1) + "/" + n : n + (n === 1 ? " match" : " matches");
     // A windowed view must not hide how many matches exist beyond the lines
     // it holds: show the server-side whole-file total when it says more —
@@ -845,9 +865,10 @@ function updateSearchCount() {
     // continueSearch).
     const more = search.fileTotal !== null && search.fileTotal > n;
     if (more) text += " · " + search.fileTotal + " in file ⏵";
-    el["search-count"].classList.toggle("more", more);
-    el["search-count"].title = more ? "Continue on the server: list the matches across the whole file" : "";
-    el["search-count"].textContent = text;
+    if (search.fileError) text += " · no file total";
+    c.classList.toggle("more", more);
+    c.title = search.fileError || (more ? "Continue on the server: list the matches across the whole file" : "");
+    c.textContent = text;
 }
 
 // continueSearch escalates a view search to the server: find on the same file
@@ -936,11 +957,14 @@ function searchApply(done) {
     search.cur = -1;
     search.applied = null;
     search.m = null;
+    search.error = null;
     if (searchableMode()) {
-        const m = buildMatcher(); // null: empty, or incomplete regexp while typing
+        const m = buildMatcher(); // null: empty, or an invalid regexp
         if (m) {
             search.applied = state.filter;
             search.m = m;
+        } else if (state.filter && settings.regex) {
+            try { new RegExp(state.filter); } catch (e) { search.error = e.message; }
         }
     }
     scheduleFileCount(); // view mode: the whole-file total, counted server-side
@@ -1020,7 +1044,7 @@ function viewSettled() {
 // line's text is given, the view scrolls to that line and highlights it.
 function jumpToFile(path, text) {
     const i = state.files.findIndex(f => !f.all && f.path === path);
-    if (i < 0) return;
+    if (i < 0) { toast(stripPrefix(path) + " is no longer served"); return; }
     state.file = state.files[i];
     comboDisplay();
     state.mode = "view";
@@ -1538,7 +1562,7 @@ function init() {
             if (!/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || (t === el["filter-input"] && !t.value)) {
                 e.preventDefault();
                 if (t.tagName === "BUTTON") t.blur(); // no click on keyup
-                togglePause();
+                setPaused(!logview.paused);
                 return;
             }
         }
@@ -1653,6 +1677,7 @@ function init() {
         if (state.mode === "find" && state.filter) connect();
     };
 
+    el["opt-pause"].onclick = () => setPaused(!logview.paused);
     el["opt-wrap"].onclick = () => {
         settings.wrap = !settings.wrap;
         saveSettings();

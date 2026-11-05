@@ -787,7 +787,7 @@ func TestFindInFileNoOverlap(t *testing.T) {
 	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 
 	var nRead int64
-	hits := findInFile(context.Background(), path, regexp.MustCompile("needle").MatchString, false, &nRead, 10, 3)
+	hits, _ := findInFile(context.Background(), path, regexp.MustCompile("needle").MatchString, false, &nRead, 10, 3)
 
 	// Line 7 falls inside line 5's after-context: already shown, so it merges
 	// there instead of opening an excerpt of its own.
@@ -1133,5 +1133,29 @@ func TestDownloadHandler(t *testing.T) {
 	downloadHandler(w, httptest.NewRequest("GET", "/files/?path=/etc/passwd", nil))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("disallowed file: status = %d", w.Code)
+	}
+}
+
+// TestFindReportsBrokenFiles checks that corrupt files return an error
+// instead of looking like "no matches"; a missing (not yet created) one is empty.
+func TestFindReportsBrokenFiles(t *testing.T) {
+	dir := t.TempDir()
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte(strings.Repeat("some log line\n", 1000)))
+	zw.Close()
+	os.WriteFile(filepath.Join(dir, "ok.log.gz"), gz.Bytes(), 0o644)
+	os.WriteFile(filepath.Join(dir, "truncated.log.gz"), gz.Bytes()[:gz.Len()/2], 0o644)
+	os.WriteFile(filepath.Join(dir, "garbage.log.gz"), []byte("not gzip at all"), 0o644)
+
+	match := regexp.MustCompile("needle").MatchString
+	for name, wantErr := range map[string]bool{
+		"ok.log.gz": false, "truncated.log.gz": true, "garbage.log.gz": true, "missing.log": false,
+	} {
+		var n int64
+		_, err := findInFile(context.Background(), filepath.Join(dir, name), match, false, &n, 3, 0)
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v, want error: %v", name, err, wantErr)
+		}
 	}
 }

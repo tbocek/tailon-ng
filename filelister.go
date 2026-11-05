@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -54,7 +55,10 @@ func createListing(sources []string) []*ListEntry {
 				files[m] = true
 			}
 		case strings.ContainsAny(src, "*?["):
-			matches, _ := filepath.Glob(src) // single-level glob; can match a directory
+			matches, err := filepath.Glob(src) // single-level glob; can match a directory
+			if err != nil {
+				warnOnce(src, err)
+			}
 			for _, m := range matches {
 				addTree(files, m)
 			}
@@ -114,6 +118,9 @@ func isBinary(path string) bool {
 // anything else is a single file (which need not exist yet).
 func addTree(files map[string]bool, p string) {
 	info, err := os.Stat(p)
+	if err != nil {
+		warnOnce(p, err) // still served: a log not created yet appears later
+	}
 	if err != nil || !info.IsDir() {
 		files[p] = true
 		return
@@ -126,11 +133,22 @@ func addTree(files map[string]bool, p string) {
 		p += string(filepath.Separator)
 	}
 	filepath.WalkDir(p, func(q string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		if err != nil {
+			warnOnce(q, err) // e.g. an unreadable subdirectory
+		} else if !d.IsDir() {
 			files[q] = true
 		}
 		return nil
 	})
+}
+
+// warnOnce logs a listing problem once per path, not on every /list.
+var warned sync.Map
+
+func warnOnce(path string, err error) {
+	if _, dup := warned.LoadOrStore(path, true); !dup {
+		slog.Warn("cannot list", "path", path, "err", err)
+	}
 }
 
 // globStar expands a glob containing "**" into matching file paths. filepath.Glob

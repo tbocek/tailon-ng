@@ -209,15 +209,22 @@ body {
    search on the server" button. */
 #search-count.more { color: var(--notice); cursor: pointer; }
 #search-count.more:hover { text-decoration: underline; }
+#search-count.err { color: #cc6666; }
 
 /* Full-height vertical separators between the toolbar's control groups. */
 #toolbar .sep { align-self: stretch; width: 1px; margin: -6px 0; background: #4a4e55; }
 
 /* Download and wrap, between the mode and the search field. */
 #toolbar .tools { display: flex; align-items: center; gap: 8px; }
-#opt-wrap { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
-#opt-wrap svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-#toolbar #opt-wrap.on { color: var(--notice); border-color: var(--notice); }
+#opt-wrap,
+#opt-pause { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
+#opt-wrap svg,
+#opt-pause svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#toolbar #opt-wrap.on,
+#toolbar #opt-pause.on { color: var(--notice); border-color: var(--notice); }
+/* Paused: the button offers play. */
+#opt-pause .play, #opt-pause.on .pause { display: none; }
+#opt-pause.on .play { display: block; }
 #version { color: #8a8f98; font-size: 12px; text-decoration: none; }
 #version:hover { color: var(--notice); }
 
@@ -351,6 +358,7 @@ body {
    included) has nothing above it to separate from. */
 #logview .find-file:first-child { border-top: none; margin-top: 0; }
 #logview .find-file:hover { text-decoration: underline; }
+#logview .find-file.err { color: #cc6666; }
 #logview .log-entry.ctx { color: #8a8f98; }
 #logview .log-entry.match { background: rgba(255, 151, 79, 0.08); }
 /* The gap between two match excerpts of one file: a small horizontal "· · ·",

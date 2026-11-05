@@ -126,12 +126,12 @@ across the whole file, each jumping back into the view at its line.
 
 Three editor-style toggles inside the input shape search and find alike:
 **Aa** match case, **.\*** regular expression (off: plain text, see below),
-**!** invert (keep the lines that do *not* match, like `grep -v`). A button
-left of the search field toggles **line wrapping**; the running version sits
+**!** invert (keep the lines that do *not* match, like `grep -v`). Buttons left
+of the search field toggle **line wrapping** and **pause**; the running version sits
 at the right end. All toggles persist in the browser (localStorage).
 
-**Space pauses** tail and view: new lines queue (the badge counts them) and
-appear when you press Space again. It works anywhere except while typing —
+**Space pauses** tail and view — as does the ⏸ button next to wrap: new
+lines queue (the badge counts them) and appear when you resume. It works anywhere except while typing —
 in the search box only when it is empty.
 
 **Plain-text queries** (**.\*** off) have a small syntax of their own, the
@@ -164,7 +164,10 @@ Find results show each file as an orange header with its match count,
 followed by the matching lines and their context. With the search box still
 empty, the headers alone are listed — the files that find is about to scan.
 Excerpts never repeat a line, and the `···` separator appears only between
-excerpts that really do have lines between them.
+excerpts that really do have lines between them. A file that cannot be read (a
+corrupt archive, no permission) is listed in red with the error — never
+silently counted as "no matches". Likewise an invalid regexp shows **invalid
+regexp** in the search field instead of quietly matching nothing.
 
 **The file selector is a collapsible tree — and writable.** Subfolders, and
 groups of files sharing a name prefix (per-host logs, say), are selectable

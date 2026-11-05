@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -184,6 +186,7 @@ type findMatch struct {
 type findResult struct {
 	Path    string      `json:"path"`
 	Matches []findMatch `json:"matches"`
+	Error   string      `json:"error,omitempty"` // unreadable file or corrupt archive
 }
 
 // findHandler searches the selected files server-side and returns JSON — the
@@ -260,14 +263,15 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	ctxLines := queryInt(query, "ctx", findCtxLines, 0, 10)
 	matches := make([][]findMatch, len(paths))
 	counts := make([]int64, len(paths))
+	errs := make([]error, len(paths))
 	read := make([]int64, len(paths)) // per-file bytes consumed, updated atomically
 	var wg sync.WaitGroup
 	for i, p := range paths {
 		wg.Go(func() {
 			if counting {
-				counts[i] = countInFile(r.Context(), p, match, invert, &read[i])
+				counts[i], errs[i] = countInFile(r.Context(), p, match, invert, &read[i])
 			} else {
-				matches[i] = findInFile(r.Context(), p, match, invert, &read[i], maxMatches, ctxLines)
+				matches[i], errs[i] = findInFile(r.Context(), p, match, invert, &read[i], maxMatches, ctxLines)
 			}
 		})
 	}
@@ -280,12 +284,13 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 
 	if counting {
 		type fileCount struct {
-			Path string `json:"path"`
-			N    int64  `json:"n"`
+			Path  string `json:"path"`
+			N     int64  `json:"n"`
+			Error string `json:"error,omitempty"`
 		}
 		out := make([]fileCount, len(paths))
 		for i, p := range paths {
-			out[i] = fileCount{p, counts[i]}
+			out[i] = fileCount{p, counts[i], errString(errs[i])}
 		}
 		if err := json.NewEncoder(w).Encode(struct {
 			Counts []fileCount `json:"counts"`
@@ -296,8 +301,8 @@ func findHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	results := []findResult{}
 	for i, p := range paths {
-		if len(matches[i]) > 0 {
-			results = append(results, findResult{Path: p, Matches: matches[i]})
+		if len(matches[i]) > 0 || errs[i] != nil {
+			results = append(results, findResult{Path: p, Matches: matches[i], Error: errString(errs[i])})
 		}
 	}
 	if err := json.NewEncoder(w).Encode(struct {
@@ -364,11 +369,14 @@ func reportProgress(w http.ResponseWriter, scansDone <-chan struct{}, read []int
 // scanLines reads path line by line — decoded if compressed, with consumed
 // on-disk bytes counted into nRead for progress — and calls fn per line until
 // fn returns false, the file ends, or the request is cancelled (the client
-// navigated away; don't finish a scan nobody reads).
-func scanLines(ctx context.Context, path string, nRead *int64, fn func(line string) bool) {
+// navigated away; don't finish a scan nobody reads). It returns open, decode
+// and read errors, so a corrupt archive is not mistaken for "no matches".
+func scanLines(ctx context.Context, path string, nRead *int64, fn func(line string) bool) error {
 	f, err := os.Open(path)
-	if err != nil {
-		return
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // listed but not created yet: empty (the listing warned once)
+	} else if err != nil {
+		return err
 	}
 	defer f.Close()
 	// The counter sits between the file and the decoder, so progress measures
@@ -376,7 +384,7 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 	var rd io.Reader = &countingReader{f, nRead}
 	if d := decoder(path); d != nil {
 		if rd, err = d(rd); err != nil {
-			return
+			return err
 		}
 		defer closeDecoder(rd)
 	}
@@ -384,16 +392,26 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 	br := bufio.NewReaderSize(rd, 64*1024)
 	for i := 0; ; i++ {
 		if i%1024 == 0 && ctx.Err() != nil {
-			return
+			return nil
 		}
 		line, err := readLine(br) // bounded: over-long lines arrive in pieces
 		if (line != "" || err == nil) && !fn(line) {
-			return
+			return nil
+		}
+		if err == io.EOF {
+			return nil
 		}
 		if err != nil {
-			return
+			return err
 		}
 	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // findInFile returns the first maxMatches hits in the file (with invert, the
@@ -403,11 +421,11 @@ func scanLines(ctx context.Context, path string, nRead *int64, fn func(line stri
 // after-context merges into that excerpt instead of starting its own, and no
 // line is ever returned twice: a hit's before-context starts after the last
 // line already returned, and Gap marks the excerpts a skip precedes.
-func findInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64, maxMatches, ctxLines int) []findMatch {
+func findInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64, maxMatches, ctxLines int) ([]findMatch, error) {
 	var ring []string // the last ctxLines lines, before-context for the next hit
-	var hits []findMatch
+	hits := []findMatch{}
 	lineNo, lastShown := 0, 0 // the current line, and the last one returned
-	scanLines(ctx, path, nRead, func(line string) bool {
+	err := scanLines(ctx, path, nRead, func(line string) bool {
 		lineNo++
 		// Every line first serves as after-context for the open hits. A
 		// matching line consumed that way is already shown (the client
@@ -447,21 +465,21 @@ func findInFile(ctx context.Context, path string, match func(string) bool, inver
 		}
 		return len(hits) < maxMatches || !complete // done: cap reached, contexts full
 	})
-	return hits
+	return hits, err
 }
 
 // countInFile returns how many lines match (with invert, how many do NOT)
 // — the whole file, uncapped (unlike findInFile there is no early exit; a
 // count must cover everything).
-func countInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64) int64 {
+func countInFile(ctx context.Context, path string, match func(string) bool, invert bool, nRead *int64) (int64, error) {
 	var n int64
-	scanLines(ctx, path, nRead, func(line string) bool {
+	err := scanLines(ctx, path, nRead, func(line string) bool {
 		if match(line) != invert {
 			n++
 		}
 		return true
 	})
-	return n
+	return n, err
 }
 
 // mergeInterval is how often all-files mode flushes its buffer of lines, sorted
